@@ -1,0 +1,9 @@
+---
+description: Commit Message Rules
+alwaysApply: true
+---
+When generating commit messages (including the Changes tab button), strictly use:
+- <type>(<scope>): <subject>
+- Types: feat, fix, docs, style, refactor, perf, test, chore, build, ci
+- Subject ≤ 72 chars, imperative mood
+Include a 1–3 line body when non-trivial.

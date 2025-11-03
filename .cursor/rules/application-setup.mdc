@@ -1,0 +1,38 @@
+---
+description: Application Setup and Run Commands
+alwaysApply: false
+---
+
+To run the application:
+1. Navigate to the `web/` directory: `cd web`
+2. Start the development server: `npm run dev` or `npm start`
+3. Application runs at http://localhost:3000
+
+Common commands from `web/` directory:
+- Build: `npm run build`
+- Tests: `npm test` (run once) or `npm run test:watch` (watch mode) or `npm run test:coverage` (with coverage)
+- Lint: `npm run lint`
+- Type-check: `npm run type-check`
+
+## Running Tests
+
+To run tests:
+1. Navigate to the `web/` directory: `cd web`
+2. Run tests once: `npm test`
+3. Run tests in watch mode: `npm run test:watch`
+4. Run tests with coverage: `npm run test:coverage`
+
+## Linting and Type Checking
+
+To lint code:
+1. Navigate to the `web/` directory: `cd web`
+2. Run linter: `npm run lint`
+
+To check TypeScript types:
+1. Navigate to the `web/` directory: `cd web`
+2. Run type-check: `npm run type-check`
+
+Common commands from project root:
+- Generate commit message: `npm run commit-msg`
+- Update changelog: `npm run changelog`
+- Create version: `npm run version`
