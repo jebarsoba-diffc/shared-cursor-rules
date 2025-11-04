@@ -1,0 +1,128 @@
+---
+description: Test Coverage Requirements
+alwaysApply: false
+---
+# Test Coverage Requirements
+
+This rule defines which files require tests and the expected test file naming conventions and directory structure.
+
+## Files That Require Tests
+
+The following file types MUST have corresponding test files:
+
+### 1. Actions (`**/core/actions/**/*`)
+- Actions represent individual use cases and MUST be tested
+- Test files should mirror the source directory structure
+
+### 2. Operations (`**/http/operations/**/*` or `**/operations/**/*`)
+- HTTP operations and API endpoints MUST be tested
+- Test files should mirror the source directory structure
+
+### 3. Infrastructure (`**/core/infrastructure/**/*`)
+- Infrastructure implementations MUST be tested
+- This includes:
+  - Repository implementations (e.g., `postgres/`, `in_memory/`)
+  - Other infrastructure concerns (e.g., external API clients, message queues)
+
+## Files That Do NOT Require Tests
+
+The following files are exempt from test coverage requirements:
+
+### 1. Domain Files (`**/core/domain/**/*`)
+- Domain entities, value objects, and domain logic are tested through integration tests in actions/operations
+- Domain layer does NOT require unit tests
+
+### 2. Test Files Themselves
+- Files containing `.test.` or `.spec.` in their path
+- Files in test directories (e.g., `core_test/`, `core_spec/`, `http_test/`, `web_spec/`)
+
+## Test File Naming Conventions
+
+Test files MUST follow one of these naming patterns:
+- `.test.{ext}` (e.g., `AddCodebase.test.ts`, `GetItems.test.py`)
+- `.spec.{ext}` (e.g., `AddCodebase.spec.ts`, `GetItems.spec.py`)
+
+Both patterns are acceptable. The test file extension MUST match the source file extension (e.g., `.ts` → `.test.ts`, `.py` → `.test.py`).
+
+## Test Directory Structure
+
+### Actions and Infrastructure Tests
+Test files should mirror the source directory structure in dedicated test directories:
+
+**Source:** `core/actions/codebase/AddCodebase.{ts,py}`
+**Tests (one of):**
+- `core_test/actions/codebase/AddCodebase.test.{ts,py}`
+- `core_test/actions/codebase/AddCodebase.spec.{ts,py}`
+- `core_spec/actions/codebase/AddCodebase.test.{ts,py}`
+- `core_spec/actions/codebase/AddCodebase.spec.{ts,py}`
+
+### Operations Tests
+Test files should mirror the source directory structure:
+
+**Source:** `http/operations/codebase/AddCodebaseOperation.{ts,py}`
+**Tests (one of):**
+- `http_test/operations/codebase/AddCodebaseOperation.test.{ts,py}`
+- `http_test/operations/codebase/AddCodebaseOperation.spec.{ts,py}`
+
+### Repository Implementation Tests
+Repository implementations (e.g., `InMemory*`, `Postgres*`) MUST be tested by a single consolidated test file that tests the interface, not individual implementations:
+
+**Source:** `core/infrastructure/in_memory/InMemoryCodebases.{ts,py}`
+**Source:** `core/infrastructure/postgres/PostgresCodebases.{ts,py}`
+**Tests (one of):**
+- `core_test/infrastructure/repositories/Codebases.test.{ts,py}`
+- `core_test/infrastructure/repositories/Codebases.spec.{ts,py}`
+- `core_spec/infrastructure/repositories/Codebases.test.{ts,py}`
+- `core_spec/infrastructure/repositories/Codebases.spec.{ts,py}`
+
+**Important:** 
+- Remove implementation-specific prefixes (e.g., `InMemory`, `Postgres`) from the test file name
+- Test the repository interface behavior, not implementation details
+- Both implementations are tested by the same test file
+
+## Examples
+
+### TypeScript Examples
+
+**Action requiring test:**
+- Source: `core/actions/codebase/AddCodebase.ts`
+- Expected test: `core_test/actions/codebase/AddCodebase.test.ts` (or `.spec.ts`)
+
+**Operation requiring test:**
+- Source: `http/operations/codebase/AddCodebaseOperation.ts`
+- Expected test: `http_test/operations/codebase/AddCodebaseOperation.test.ts` (or `.spec.ts`)
+
+**Repository requiring test:**
+- Source: `core/infrastructure/postgres/PostgresUsers.ts`
+- Expected test: `core_test/infrastructure/repositories/Users.test.ts` (or `.spec.ts`)
+
+**Domain file (no test required):**
+- Source: `core/domain/user/User.ts`
+- No test file required
+
+### Python Examples
+
+**Action requiring test:**
+- Source: `core/actions/codebase/add_codebase.py`
+- Expected test: `core_test/actions/codebase/add_codebase.test.py` (or `.spec.py`)
+
+**Operation requiring test:**
+- Source: `http/operations/codebase/add_codebase_operation.py`
+- Expected test: `http_test/operations/codebase/add_codebase_operation.test.py` (or `.spec.py`)
+
+**Repository requiring test:**
+- Source: `core/infrastructure/postgres/postgres_users.py`
+- Expected test: `core_test/infrastructure/repositories/users.test.py` (or `.spec.py`)
+
+**Domain file (no test required):**
+- Source: `core/domain/user/user.py`
+- No test file required
+
+## Enforcement
+
+When creating or modifying files in the following directories, ensure corresponding test files exist:
+- `**/core/actions/**/*`
+- `**/http/operations/**/*` or `**/operations/**/*`
+- `**/core/infrastructure/**/*`
+
+When creating or modifying domain files, do NOT create unit tests for them. Test domain logic through integration tests in actions/operations instead.

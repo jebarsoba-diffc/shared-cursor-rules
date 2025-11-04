@@ -48,6 +48,7 @@ cp .cursor/rules/application-setup.mdc /path/to/your/project/.cursor/rules/
 
 - **`application-setup.mdc`** - Instructions for running, testing, and building applications
 - **`conventional-commits.mdc`** - Commit message conventions and standards
+- **`test-coverage.mdc`** - Test coverage requirements and conventions for actions, operations, and infrastructure (applies to both Python and TypeScript)
 
 ### Python Rules
 
