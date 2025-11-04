@@ -1,6 +1,6 @@
 ---
 description: Commit Message Rules
-alwaysApply: true
+alwaysApply: false
 ---
 When generating commit messages (including the Changes tab button), strictly use:
 - <type>(<scope>): <subject>
