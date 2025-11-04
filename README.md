@@ -44,8 +44,14 @@ cp .cursor/rules/application-setup.mdc /path/to/your/project/.cursor/rules/
 
 ## Available Rules
 
+### General Rules
+
 - **`application-setup.mdc`** - Instructions for running, testing, and building applications
 - **`conventional-commits.mdc`** - Commit message conventions and standards
+
+### Python Rules
+
+- **`python/api-core-actions.mdc`** - Standards and patterns for Python API Actions in `core/actions` directory structure
 
 ## Contributing
 

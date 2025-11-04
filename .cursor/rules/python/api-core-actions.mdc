@@ -1,0 +1,219 @@
+---
+description: Python API Actions Rules
+globs: **/core/actions/**/*.py
+alwaysApply: false
+---
+
+# Python API Actions Rules
+
+## Purpose and Structure
+
+API Actions represent individual use cases of the application. Each Action should:
+
+1. Implement exactly one use case.
+2. Have a meaningful class name that reflects its purpose (e.g., `GetItems`, `CreateUser`, `UpdateProfile`), following PascalCase convention.
+3. Reside in an appropriate domain folder structure that MUST match the name of the domain of the use case (e.g., actions for Items should be in `/items`, actions for Users in `/users`).
+
+## Example
+
+```python
+from src.core.domain.items import Item, Items
+from typing import List
+
+class GetItems:
+    def __init__(self, items: Items):
+        self._items = items
+
+    async def execute(self) -> List[Item]:
+        return await self._items.get_all()
+```
+
+## Dependency Injection
+
+1. Actions MUST receive all dependencies through the `__init__` constructor.
+2. All dependencies MUST be stored as private attributes (prefixed with `_`).
+3. Dependencies MUST NOT be reassigned after initialization (treat as immutable/read-only).
+4. Dependencies SHOULD be abstract base classes (using `abc`) or Protocols, not concrete implementations.
+5. Repository dependencies MUST follow the naming convention: Domain class name + "s" (e.g., `Items`, `Users`, `Profiles`).
+
+```python
+from abc import ABC, abstractmethod
+
+# Define abstract dependencies (Protocols or ABCs)
+class Items(ABC):
+    @abstractmethod
+    async def get_all(self) -> List[Item]: ...
+
+class Logger(ABC):
+    @abstractmethod
+    def info(self, message: str): ...
+
+class IdGenerator(ABC):
+    @abstractmethod
+    def generate(self) -> str: ...
+
+# CORRECT
+class CorrectAction:
+    def __init__(self, items: Items, logger: Logger, id_generator: IdGenerator):
+        self._items = items  # Private, typed, not reassigned
+        self._logger = logger
+        self._id_generator = id_generator
+
+# INCORRECT
+class IncorrectAction:
+    def __init__(self, items: object, logger: object, id_generator: object):
+        self.items = items  # Missing private prefix
+        self.logger = logger  # Missing type hints
+        self.id_generator = id_generator
+
+    async def execute(self):
+        self._items = None  # NEVER reassign dependencies!
+```
+
+## Method Requirements
+
+1. Actions MUST have exactly one public method named `execute`.
+2. The `execute` method MUST be `async`.
+3. The `execute` method MUST have type hints for parameters and return types.
+4. The `execute` method SHOULD have a single return point.
+
+```python
+from typing import List
+from src.core.domain.items import Item
+
+# CORRECT
+class CorrectExecute:
+    def __init__(self, items: Items):
+        self._items = items
+
+    async def execute(self, user_id: str) -> List[Item]:
+        items = await self._items.get_by_user_id(user_id)
+        return items
+
+# INCORRECT
+class IncorrectExecute:
+    def __init__(self, items: Items):
+        self._items = items
+
+    def execute(self, user_id: str): # Missing async and return type hint
+        # ...
+        pass
+```
+
+## Error Handling
+
+1. Actions MUST raise specific `DomainError` instances when validations fail or operations cannot complete.
+2. Domain errors MUST be imported from domain-specific error modules (e.g., `src.core.domain.user.errors`), not from a centralized errors module.
+3. Domain errors SHOULD be defined as module-level constants (e.g., `USER_NOT_FOUND = DomainError("USER_NOT_FOUND")`).
+4. Actions SHOULD NOT catch exceptions internally unless they can be properly handled and potentially re-raised as a `DomainError`.
+5. Generic exceptions (like `Exception` or `ValueError` without specific context) SHOULD NOT be raised directly.
+
+```python
+from src.core.domain.user import User, Users
+from src.core.domain.user.errors import USER_NOT_FOUND  # Domain-specific error module
+
+# CORRECT
+class CorrectErrorHandling:
+    def __init__(self, users: Users):
+        self._users = users
+
+    async def execute(self, id: str) -> User:
+        user = await self._users.get_by_id(id)
+
+        if user is None:
+            raise USER_NOT_FOUND # Specific DomainError subclass
+
+        return user
+
+# INCORRECT
+class IncorrectErrorHandling:
+    def __init__(self, users: Users):
+        self._users = users
+
+    async def execute(self, id: str) -> User:
+        user = await self._users.get_by_id(id)
+
+        if user is None:
+            raise Exception("No user found")  # Generic Exception - WRONG!
+
+        return user
+
+# ALSO INCORRECT - Wrong import location
+from src.core.domain.errors import USER_NOT_FOUND  # Centralized errors - WRONG!
+# Should be: from src.core.domain.user.errors import USER_NOT_FOUND
+```
+
+## Common Utilities
+
+1. New UUIDs MUST always be created using `id_generator.generate()`. Ensure no other library/dependency (like `uuid.uuid4()`) is used directly for generating domain IDs.
+2. Current timestamps MUST always be obtained using `clock.now()`. Ensure no other method (like `datetime.now()`) is used directly.
+
+```python
+from src.core.domain.items import Item, Items, CreateItemData
+from src.core.ports import IdGenerator, Clock # Assuming these are defined Ports/ABCs
+
+# CORRECT
+class CorrectUtilities:
+    def __init__(self, items: Items, id_generator: IdGenerator, clock: Clock):
+        self._items = items
+        self._id_generator = id_generator
+        self._clock = clock
+
+    async def execute(self, data: CreateItemData) -> Item:
+        item_dict = {
+            "id": self._id_generator.generate(),
+            "created_at": self._clock.now(),
+            # other properties from data
+            **data.dict()
+        }
+        # Assuming Item can be created from a dict or similar
+        new_item = Item(**item_dict)
+        return await self._items.create(new_item)
+
+# INCORRECT
+import uuid
+from datetime import datetime
+
+class IncorrectUtilities:
+    def __init__(self, items: Items):
+        self._items = items
+
+    async def execute(self, data: CreateItemData) -> Item:
+        item_dict = {
+            "id": str(uuid.uuid4()), # Incorrect: Direct use of uuid library
+            "created_at": datetime.now(), # Incorrect: Direct use of datetime
+            # other properties from data
+             **data.dict()
+        }
+        new_item = Item(**item_dict)
+        return await self._items.create(new_item)
+```
+
+## Additional Guidelines
+
+1. Actions SHOULD be stateless. Instance attributes should primarily hold injected dependencies.
+2. Actions SHOULD NOT be directly dependent on infrastructure concerns (e.g., specific database clients, external API libraries). Depend on abstractions (Ports/Repositories).
+3. Input validation SHOULD occur at the beginning of the `execute` method, potentially using Pydantic models or similar validation mechanisms passed in the data object.
+4. The `execute` method SHOULD have a single return point to improve readability and maintainability.
+
+```python
+# CORRECT - Single return point
+async def execute(self, user_id: str) -> List[Item]:
+    items = await self._items.get_by_user_id(user_id)
+    filtered_items = [item for item in items if item.is_active]
+    return filtered_items
+
+# INCORRECT - Multiple return points
+async def execute(self, user_id: str) -> List[Item]:
+    items = await self._items.get_by_user_id(user_id)
+
+    if not items:
+        return []  # Early return
+
+    filtered_items = [item for item in items if item.is_active]
+
+    if len(filtered_items) > 100:
+        return filtered_items[:100]  # Another return
+
+    return filtered_items  # Third return
+```
