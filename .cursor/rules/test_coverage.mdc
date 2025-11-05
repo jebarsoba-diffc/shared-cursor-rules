@@ -14,9 +14,10 @@ The following file types MUST have corresponding test files:
 - Actions represent individual use cases and MUST be tested
 - Test files should mirror the source directory structure
 
-### 2. Operations (`**/http/operations/**/*` or `**/operations/**/*`)
+### 2. Operations (`**/http/operations/**/*`, `**/web/operations/**/*`, or `**/operations/**/*`)
 - HTTP operations and API endpoints MUST be tested
 - Test files should mirror the source directory structure
+- For Python projects, operations are typically in `web/operations/` (FastAPI)
 
 ### 3. Infrastructure (`**/core/infrastructure/**/*`)
 - Infrastructure implementations MUST be tested
@@ -44,6 +45,14 @@ Test files MUST follow one of these naming patterns:
 
 Both patterns are acceptable. The test file extension MUST match the source file extension (e.g., `.ts` → `.test.ts`, `.py` → `.test.py`).
 
+### Python-Specific Naming Requirements
+
+For Python test files, pytest requires test files to start with `test_` prefix. Therefore, Python test files MUST use one of these patterns:
+- `test_{name}.py` (e.g., `test_get_items.py`, `test_add_codebase.py`)
+- `test_{name}.test.py` (e.g., `test_get_items.test.py`) - less common but acceptable
+
+**Important**: The basename (without extension) of test files MUST be unique across ALL test directories to avoid Python import conflicts. If an action test and operation test would have the same basename, use a suffix to distinguish them (e.g., `test_get_validation_job_status.py` for action, `test_get_validation_job_status_operation.py` for operation).
+
 ## Test Directory Structure
 
 ### Actions and Infrastructure Tests
@@ -60,9 +69,14 @@ Test files should mirror the source directory structure in dedicated test direct
 Test files should mirror the source directory structure:
 
 **Source:** `http/operations/codebase/AddCodebaseOperation.{ts,py}`
+**Source:** `web/operations/codebase/add_codebase_operation.{ts,py}`
 **Tests (one of):**
 - `http_test/operations/codebase/AddCodebaseOperation.test.{ts,py}`
 - `http_test/operations/codebase/AddCodebaseOperation.spec.{ts,py}`
+- `web_test/operations/codebase/add_codebase_operation.test.{ts,py}` (for Python projects using `web/operations/`)
+- `web_test/operations/codebase/add_codebase_operation.spec.{ts,py}`
+
+**Note**: For Python projects, use `web_test` if operations are in `web/operations/`, or `http_test` if operations are in `http/operations/`.
 
 ### Repository Implementation Tests
 Repository implementations (e.g., `InMemory*`, `Postgres*`) MUST be tested by a single consolidated test file that tests the interface, not individual implementations:
@@ -104,15 +118,16 @@ Repository implementations (e.g., `InMemory*`, `Postgres*`) MUST be tested by a 
 
 **Action requiring test:**
 - Source: `core/actions/codebase/add_codebase.py`
-- Expected test: `core_test/actions/codebase/add_codebase.test.py` (or `.spec.py`)
+- Expected test: `core_test/actions/codebase/test_add_codebase.py` (Python: must start with `test_`)
 
 **Operation requiring test:**
-- Source: `http/operations/codebase/add_codebase_operation.py`
-- Expected test: `http_test/operations/codebase/add_codebase_operation.test.py` (or `.spec.py`)
+- Source: `web/operations/codebase/add_codebase_operation.py`
+- Expected test: `web_test/operations/codebase/test_add_codebase_operation.py` (Python: must start with `test_`)
+- Alternative: `web_test/operations/codebase/test_add_codebase_operation_operation.py` (if naming conflict with action test)
 
 **Repository requiring test:**
 - Source: `core/infrastructure/postgres/postgres_users.py`
-- Expected test: `core_test/infrastructure/repositories/users.test.py` (or `.spec.py`)
+- Expected test: `core_test/infrastructure/repositories/test_users.py` (Python: must start with `test_`)
 
 **Domain file (no test required):**
 - Source: `core/domain/user/user.py`
@@ -126,3 +141,30 @@ When creating or modifying files in the following directories, ensure correspond
 - `**/core/infrastructure/**/*`
 
 When creating or modifying domain files, do NOT create unit tests for them. Test domain logic through integration tests in actions/operations instead.
+
+## Python-Specific Testing Considerations
+
+### FastAPI Operations Testing
+
+When testing FastAPI operations/endpoints:
+- Use `fastapi.testclient.TestClient` to test HTTP endpoints
+- Ensure `httpx` dependency is installed (required by TestClient)
+- Mock the `provider` dictionary to isolate operation logic from action implementations
+- Test both success and error cases, including HTTP validation errors
+
+### Avoiding Import Conflicts
+
+When creating Python test files:
+- Ensure test file basenames are unique across ALL test directories (`core_test`, `web_test`, etc.)
+- If an action and operation have similar names, use suffixes to distinguish test files:
+  - Action test: `test_get_validation_job_status.py`
+  - Operation test: `test_get_validation_job_status_operation.py`
+- Clear `__pycache__` directories if import conflicts occur: `find . -name "__pycache__" -type d -exec rm -r {} +`
+
+### Test Directory Structure for Python
+
+For Python projects, test directories typically use:
+- `core_test/` for core layer tests (actions, infrastructure)
+- `web_test/` or `http_test/` for HTTP/operations layer tests
+
+Ensure `conftest.py` exists in test directories to set up Python path and shared fixtures.
