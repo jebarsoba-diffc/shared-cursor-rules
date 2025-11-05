@@ -1,0 +1,181 @@
+---
+description: Pyproject.toml Fixed Dependencies Rule
+globs: **/pyproject.toml
+alwaysApply: false
+---
+
+# Pyproject.toml Fixed Dependencies Rule
+
+## Purpose and Requirements
+
+Pyproject.toml files MUST use fixed dependency versions without version range specifiers to ensure reproducible builds and consistent deployments across all environments.
+
+## Fixed Version Requirements
+
+1. **Dependencies MUST use exact versions**: All entries in `dependencies`, `optional-dependencies`, and build system requirements MUST specify exact version numbers.
+
+2. **Forbidden version specifiers** (PEP 440):
+
+   - Compatible release (`~=`) - e.g., `~=1.4.2`
+   - Version matching (`==`) with wildcards - e.g., `==1.4.*`
+   - Version exclusion (`!=`) - e.g., `!=1.5`
+   - Ordered comparison (`<`, `<=`, `>`, `>=`) - e.g., `>=1.4.2`
+   - Arbitrary equality (`===`) - e.g., `===1.4.2`
+   - Complex version specifiers with multiple constraints
+   - URL-based dependencies (git+https://, etc.)
+
+3. **Required format**: Versions MUST use exact equality (`==`) with full semantic version: `==MAJOR.MINOR.PATCH`
+
+## Examples
+
+### CORRECT - Fixed versions
+
+```toml
+[project]
+dependencies = [
+    "fastapi==0.95.0",
+    "pydantic==1.10.7",
+    "sqlalchemy==2.0.10",
+    "requests==2.28.2"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.2.2",
+    "black==23.3.0",
+    "mypy==1.1.1"
+]
+
+[build-system]
+requires = [
+    "setuptools==67.6.0",
+    "wheel==0.40.0"
+]
+```
+
+### INCORRECT - Flexible versions
+
+```toml
+[project]
+dependencies = [
+    "fastapi~=0.95.0",      # Compatible release forbidden
+    "pydantic>=1.10.0",     # Minimum version forbidden
+    "sqlalchemy==2.0.*",    # Wildcard forbidden
+    "requests>2.28.0",      # Greater than forbidden
+    "numpy<2.0.0",          # Less than forbidden
+    "pandas!=1.5.0"         # Version exclusion forbidden
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",        # Range forbidden
+    "black~=23.0.0",         # Compatible release forbidden
+    "mypy==1.*"              # Wildcard forbidden
+]
+
+[build-system]
+requires = [
+    "setuptools>=40.0.0",   # Minimum version forbidden
+    "wheel"                  # No version specified forbidden
+]
+```
+
+## Validation Rules
+
+1. **Scan all dependency sections**: Check `dependencies`, `optional-dependencies`, and `build-system.requires`
+
+2. **Version format validation**: Each dependency MUST:
+
+   - Use exact equality operator (`==`)
+   - Specify complete semantic version (MAJOR.MINOR.PATCH)
+   - Not contain any forbidden version specifiers
+   - Not use wildcards or incomplete version numbers
+
+3. **Error reporting**: Flag any dependency that uses:
+   - Compatible release (`~=`)
+   - Version ranges (`>=`, `>`, `<`, `<=`)
+   - Wildcards (`*`) in version specifiers
+   - Version exclusion (`!=`)
+   - Missing version specifiers
+   - URL-based or VCS dependencies
+   - Complex multi-constraint specifiers
+
+## Special Cases
+
+### Environment Markers
+
+Environment markers are allowed but versions must still be fixed:
+
+```toml
+# CORRECT
+dependencies = [
+    "colorama==0.4.6; sys_platform == 'win32'"
+]
+
+# INCORRECT
+dependencies = [
+    "colorama>=0.4.0; sys_platform == 'win32'"  # Range forbidden even with markers
+]
+```
+
+### Extras
+
+Dependency extras are allowed but versions must be fixed:
+
+```toml
+# CORRECT
+dependencies = [
+    "requests[security]==2.28.2"
+]
+
+# INCORRECT
+dependencies = [
+    "requests[security]>=2.28.0"  # Range forbidden even with extras
+]
+```
+
+## Rationale
+
+Fixed dependency versions in Python projects ensure:
+
+- **Reproducible environments**: Virtual environments contain identical package versions
+- **Consistent CI/CD**: Build pipelines produce identical results
+- **Predictable deployments**: Production matches development environments exactly
+- **Security auditability**: Known versions can be scanned and tracked
+- **Dependency conflict resolution**: Clear dependency trees without version ambiguity
+- **Container consistency**: Docker images build with identical dependencies
+
+## Migration Guide
+
+To fix flexible versions:
+
+1. Create a virtual environment and install current dependencies
+2. Use `pip freeze` to get exact installed versions
+3. Update pyproject.toml with exact versions from pip freeze output
+4. Test installation in clean environment: `pip install -e .`
+5. Update requirements lock files (requirements.txt, poetry.lock, etc.)
+6. Commit all dependency files to ensure team consistency
+
+Alternative using pip-tools:
+
+```bash
+pip-compile --generate-hashes pyproject.toml
+```
+
+## Build System Requirements
+
+Build system dependencies are especially critical and MUST use fixed versions:
+
+```toml
+[build-system]
+requires = [
+    "setuptools==67.6.0",
+    "wheel==0.40.0",
+    "build==0.10.0"
+]
+build-backend = "setuptools.build_meta"
+```
+
+## Exceptions
+
+No exceptions are allowed. All dependencies including build-system requirements MUST use fixed versions for reliable and reproducible Python environments.

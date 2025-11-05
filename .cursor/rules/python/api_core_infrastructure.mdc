@@ -1,0 +1,143 @@
+---
+description: Python API Infrastructure Implementation Rules
+globs: **/core/infrastructure/**/*.py
+alwaysApply: false
+---
+
+# Python API Infrastructure Implementation Rules
+
+## Purpose and Structure
+
+Infrastructure implementations handle external integrations, data storage, and any non-domain-specific concerns. These implementations should:
+
+1.  **Implement a domain Port/Interface** (defined using `abc.ABC` or `typing.Protocol` in `src.core.ports` or within the specific domain module) to ensure dependency inversion and clear separation.
+    - **Exception**: External service client classes that provide direct communication with external APIs or services do NOT require a domain Port/Interface. These are low-level infrastructure clients that are used by higher-level domain services.
+    - **Identifying external clients**: Classes ending with "Client" suffix (e.g., `AzureOpenAIClient`, `PromptClient`, `PostgresClient`) are typically external service clients and do not need domain Ports/Interfaces. File names should follow snake_case (e.g., `azure_openai_client.py`, `prompt_client.py`).
+    - **Example of Port required**: `PostgresChunks(Chunks)` in `postgres_chunks.py` (domain repository implementing Port)
+    - **Example of no Port required**: `AzureOpenAIClient` in `azure_openai_client.py`, `PromptClient` in `prompt_client.py`, `HttpClient` in `http_client.py` (external service clients)
+2.  **Use constructor injection (`__init__`)** for dependencies like database clients, HTTP clients, or external services (e.g., `PostgresClient`, `OpenAIClient`). Store them as private attributes (`_dependency`).
+3.  **Encapsulate external service logic** within the class methods, hiding specific library calls or implementation details.
+4.  **Map domain objects** to and from external representations (e.g., database rows, API response dicts) within the infrastructure layer. Use factory methods (`DomainClass.create(...)`) to create domain objects from external data.
+5.  **Use parameterized queries** (e.g., with `psycopg2` or SQLAlchemy) and secure practices for API calls to prevent vulnerabilities.
+6.  **Handle exceptions explicitly**, catch specific exceptions from underlying libraries (e.g., `psycopg2.Error`, `requests.RequestException`), log them appropriately, and potentially re-raise them as custom infrastructure-level exceptions or return specific error indicators if defined by the Port.
+7.  **Dependencies should be treated as immutable** after injection (no reassigning `self._dependency`).
+8.  **Avoid embedding business logic**; infrastructure classes should only orchestrate external interactions and data mapping.
+9.  **Consider performance** optimizations like caching (e.g., using `cachetools` or Redis), connection pooling, or batching where appropriate.
+10. **Follow domain-driven naming conventions** for classes and methods where possible (e.g., `PostgresChunks` implementing `Chunks` port).
+
+## Example: Postgres Repository
+
+```python
+from typing import List, Tuple
+import psycopg2 # Example DB driver
+
+from src.core.domain.chunks import Chunk, Chunks, ChunkParams # Assuming domain/ports exist
+from src.core.infrastructure.postgres import PostgresClient # Assuming a client class
+from src.core.domain.errors import InfrastructureError # Custom infra error
+
+class PostgresChunks(Chunks): # Implements the Chunks Port
+    _TABLE_NAME = "chunks"
+
+    def __init__(self, postgres_client: PostgresClient):
+        self._postgres_client = postgres_client
+
+    async def put(self, chunk: Chunk, embedding: List[float]) -> None:
+        data = {
+            "id": chunk.id,
+            "file_name": chunk.file_name,
+            "page_number": chunk.page_number,
+            "content": chunk.content,
+            "created_at": chunk.created_at,
+            "updated_at": chunk.updated_at,
+        }
+        # Assuming postgresClient handles the embedding logic and SQL generation safely
+        try:
+            if chunk.updated_at:
+                 # Use parameterized queries!
+                await self._postgres_client.update_with_embedding(
+                    self._TABLE_NAME,
+                    data,
+                    embedding,
+                    condition_sql="id = %s",
+                    condition_params=(chunk.id,)
+                )
+            else:
+                await self._postgres_client.insert_with_embedding(
+                    self._TABLE_NAME, data, embedding
+                )
+        except psycopg2.Error as e:
+            # Log the error e
+            raise InfrastructureError(f"Failed to put chunk {chunk.id}: {e}") from e
+
+    def _map_row_to_domain(self, row: Tuple) -> Chunk:
+        # Assuming row order matches ChunkParams fields or use a DictCursor
+        # Perform necessary type conversions (e.g., DB timestamp to datetime)
+        try:
+            params = ChunkParams(
+                id=row[0],
+                file_name=row[1],
+                page_number=row[2],
+                content=row[3],
+                # Assuming metadata is stored as JSONB and parsed
+                metadata=row[4] or {},
+                created_at=row[5],
+                updated_at=row[6]
+            )
+            return Chunk.create(params)
+        except (IndexError, TypeError, ValueError) as e:
+            # Log the error and the problematic row data
+            raise InfrastructureError(f"Failed to map row to Chunk domain object: {e}")
+
+    # Other methods like get_by_id, search etc.
+    async def get_by_id(self, chunk_id: str) -> Optional[Chunk]:
+        # ... implementation using self._postgres_client ...
+        # ... map row using self._map_row_to_domain ...
+        pass
+```
+
+## Example: OpenAI LLM Client Adapter
+
+```python
+from openai import OpenAI, OpenAIError # Example library
+from src.core.ports import LLM # Assuming LLM Port/Interface
+from src.core.domain.errors import InfrastructureError # Custom infra error
+
+class OpenAIService(LLM):
+    def __init__(self, openai_client: OpenAI, default_model: str):
+        self._openai_client = openai_client
+        self._default_model = default_model
+
+    async def generate_text(
+        self, prompt: str, model: Optional[str] = None, temperature: float = 0.7
+    ) -> str:
+        try:
+            # Use asyncio compatible client or run in executor if library is sync
+            response = await self._openai_client.chat.completions.create(
+                model=model or self._default_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+            )
+            # Proper error handling and checking response structure
+            if response.choices:
+                return response.choices[0].message.content or ""
+            else:
+                raise InfrastructureError("OpenAI response contained no choices.")
+        except OpenAIError as e:
+            # Log the error e
+            print(f"OpenAI API Error: {e}") # Replace with proper logging
+            raise InfrastructureError(f"Failed to generate text from OpenAI: {e}") from e
+        except Exception as e:
+             # Catch unexpected errors
+             print(f"Unexpected error interacting with OpenAI: {e}") # Replace with proper logging
+             raise InfrastructureError(f"Unexpected error during text generation: {e}") from e
+
+```
+
+## Additional Best Practices
+
+- **Configuration:** Use environment variables or configuration files for API keys, database connection strings, and other sensitive details. Inject configuration objects rather than reading env vars directly in the class.
+- **Resilience:** Implement retries (e.g., using the `tenacity` library) for network requests where appropriate.
+- **Logging:** Use structured logging to track operations, errors, and performance within infrastructure components.
+- **Statelessness:** Keep infrastructure classes stateless where possible; state should be managed by external services (DBs, caches) or passed into methods.
+
+These rules help ensure infrastructure implementations are **robust, testable, and decoupled** from the core domain logic, adhering to Clean Architecture/Hexagonal principles.

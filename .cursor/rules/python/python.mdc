@@ -1,0 +1,59 @@
+---
+description: Pyproject.toml Fixed Dependencies Rule
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python Code Rules
+
+## Review Criteria
+
+1. Maintain code readability and simplicity - follow PEP 8 guidelines (https://pep8.org/)
+2. Use type hints to improve code clarity and maintainability
+3. Avoid using global variables; prefer function arguments and return values
+4. Handle exceptions properly using `try/except` blocks with specific exception types
+5. Use meaningful variable and function names (snake_case for variables/functions, PascalCase for classes)
+6. Employ Pythonic idioms (enumerate, zip, dict/set comprehensions, etc.)
+7. Structure packages properly using **init**.py files and following the Python Module Pattern
+
+## Good Practices
+
+- Write modular and reusable code
+- Add docstrings to functions, classes, and modules following a consistent format (Google, NumPy, or reStructuredText)
+- Keep functions small and focused on a single task
+- Use list/dict/set comprehensions for concise and efficient loops
+- Leverage Python's standard library and built-in functions before external packages
+- Avoid hardcoding values; use constants or configuration files
+- Use virtual environments (venv, conda) to isolate project dependencies
+- Implement proper dependency management using modern tools like Poetry or Pipenv
+- Utilize static type checking with mypy to validate type hints
+
+## Testing Best Practices
+
+- Write unit tests for the most relevant logic
+- Use fixtures and parameterization for test efficiency
+- Implement proper mocking with a proper library
+- Test edge cases and error conditions
+
+## Advanced Practices
+
+#- Use dataclasses or Pydantic models for data validation and serialization
+
+- Use appropriate design patterns that align with Python's philosophy
+- Implement proper error handling and custom exceptions
+- Use appropriate caching strategies where needed
+- Consider performance optimizations:
+  - Use generators for memory efficiency
+  - Profile code with cProfile or line_profiler to identify bottlenecks
+  - Choose appropriate data structures for the task
+  - Use itertools and functools for efficient operations
+
+## Library-Specific Best Practices
+
+### Data Science
+
+- Pandas: Chain operations, use vectorized operations over loops, avoid inplace operations
+
+### API Development
+
+- FastAPI: Utilize Pydantic models, path operation function decorators, and dependency injection

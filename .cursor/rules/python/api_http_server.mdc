@@ -1,0 +1,194 @@
+---
+description: Python HTTP Server (Application Setup) Rules
+globs: **/web/server/**/*.py
+alwaysApply: false
+---
+
+# Python HTTP Server (Application Setup) Rules
+
+## Purpose and Architecture
+
+The main server setup file is responsible for initializing and configuring the web server application instance (e.g., FastAPI, Flask). Its primary tasks include:
+
+1.  Creating the main application object (e.g., `app = FastAPI()`).
+2.  Setting up essential global middleware (CORS, custom authentication, logging, request/response handling middleware).
+3.  Dynamically registering all defined API routers (which contain groups of operations/endpoints).
+4.  Defining and attaching global exception handlers to standardize error responses.
+5.  Potentially managing application lifespan events (startup/shutdown) for resource initialization/cleanup.
+
+The server setup should be environment-aware for configurations like CORS, database connections, etc., often loaded from environment variables or configuration files.
+
+## Structure and Key Functions (FastAPI Example)
+
+1.  The file MUST define and export the main application instance (e.g., `app = FastAPI()`).
+2.  It SHOULD use helper functions or separate modules to organize the setup of middleware, routers, and event handlers if the setup is complex.
+3.  A `Provider` or dependency injection setup (if used) SHOULD be initialized here and made available to the application, often through request-scoped dependencies or context.
+4.  Global exception handlers MUST be defined to catch specific custom exceptions (like `DomainError`) and general exceptions, converting them into standardized HTTP error responses.
+
+```python
+# src/main.py (FastAPI example)
+
+from fastapi import FastAPI, Request, Depends
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+# from starlette.exceptions import HTTPException as StarletteHTTPException # Already handled by FastAPI
+
+from src.core.provider import Provider, get_provider_singleton, initialize_provider # DI setup
+from src.domain.errors import DomainError # Custom domain errors
+from src.api.routers import items_router, users_router # Example routers
+from src.config import settings # Application settings
+
+# Initialize the dependency provider (could be more complex)
+initialize_provider()
+
+# Main application instance
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+)
+
+# Helper to setup middleware
+def setup_middleware(application: FastAPI, provider_instance: Provider):
+    # CORS Middleware
+    if settings.BACKEND_CORS_ORIGINS:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=[str(origin) for origin in settings.BACKEND_CORS_ORIGINS],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    # Example: Custom Auth Middleware (conceptual)
+    # from src.api.middleware.auth import AuthMiddleware
+    # application.add_middleware(AuthMiddleware, provider=provider_instance)
+
+    # Example: Request logging middleware
+    # from src.api.middleware.logging import LoggingMiddleware
+    # application.add_middleware(LoggingMiddleware)
+
+# Helper to register routers
+def register_routers(application: FastAPI):
+    application.include_router(items_router.router, prefix=settings.API_V1_STR)
+    application.include_router(users_router.router, prefix=settings.API_V1_STR)
+    # ... include other routers ...
+
+# Helper to setup exception handlers
+def setup_exception_handlers(application: FastAPI):
+    @application.exception_handler(DomainError)
+    async def domain_exception_handler(request: Request, exc: DomainError):
+        # Map specific domain errors to HTTP status codes
+        status_code = 400 # Default for DomainError
+        if exc.code == "NOT_FOUND": # Assuming error objects have a code
+            status_code = 404
+        elif exc.code == "UNAUTHORIZED":
+            status_code = 401
+        elif exc.code == "FORBIDDEN":
+            status_code = 403
+        # Add more mappings as needed
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": exc.message}, # Or exc.to_dict() if it exists
+        )
+
+    # FastAPI handles HTTPException automatically, but you can override or add others
+    # @application.exception_handler(StarletteHTTPException)
+    # async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    #     return JSONResponse(
+    #         status_code=exc.status_code,
+    #         content={"detail": exc.detail},
+    #     )
+
+    @application.exception_handler(Exception)
+    async def generic_exception_handler(request: Request, exc: Exception):
+        # Log the error for unexpected issues
+        # logger.error(f"Unhandled exception: {exc}", exc_info=True)
+        print(f"Unhandled exception: {exc}") # Replace with actual logging
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "An unexpected internal server error occurred."},
+        )
+
+# Application Lifespan Events (Optional)
+@app.on_event("startup")
+async def startup_event():
+    # Initialize resources like database connections, etc.
+    # provider = get_provider_singleton()
+    # await provider.db_client.connect()
+    print("Application startup: Initializing resources...")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Cleanup resources
+    # provider = get_provider_singleton()
+    # await provider.db_client.disconnect()
+    print("Application shutdown: Cleaning up resources...")
+
+
+# --- Orchestrate Setup ---
+p_instance = get_provider_singleton() # Get the initialized provider
+
+setup_middleware(app, p_instance)
+register_routers(app)
+setup_exception_handlers(app)
+
+# To run (e.g., with uvicorn main:app --reload):
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# INCORRECT Structure (conceptual)
+# def create_messy_app():
+#     app = FastAPI()
+#     # All middleware, routes, error handlers defined inline, no organization
+#     app.add_middleware(CORSMiddleware, allow_origins=["*"])
+#     @app.get("/items")
+#     async def get_items(): return []
+#     # ... many more routes ...
+#     @app.exception_handler(ValueError)
+#     async def value_error_handler(r,e): return JSONResponse(status_code=400, content={})
+#     return app
+```
+
+## Middleware Configuration
+
+1.  Standard middleware (CORS, GZip, etc.) SHOULD be applied before custom application middleware.
+2.  Middleware order matters. For example, authentication middleware should run before route handlers that require an authenticated user. Logging or metrics middleware might wrap the entire request-response cycle.
+3.  In FastAPI, middleware is added using `app.add_middleware(MiddlewareClass, **options)` or by decorating functions with `@app.middleware("http")`.
+
+## Router Registration
+
+1.  API routes/endpoints SHOULD be organized into `APIRouter` instances, typically one per domain or major feature (e.g., `items_router.py`, `users_router.py`).
+2.  These routers MUST be included in the main application instance using `app.include_router(router_instance, prefix="/api/v1", tags=["Domain"])`.
+3.  The `provider` or DI mechanism must be accessible to the endpoint functions within these routers, usually via FastAPI's `Depends` system.
+
+## Request Validation
+
+1.  Request body, path parameters, and query parameters are typically validated automatically by FastAPI when using Pydantic models and type hints in endpoint function signatures.
+2.  Global validation error handling is managed by FastAPI, which by default returns a 422 Unprocessable Entity response. This can be customized with a custom exception handler for `fastapi.exceptions.RequestValidationError`.
+
+```python
+# Example: Customizing RequestValidationError for 400 instead of 422
+# from fastapi.exceptions import RequestValidationError
+# from fastapi.responses import PlainTextResponse
+#
+# @app.exception_handler(RequestValidationError)
+# async def validation_exception_handler(request, exc: RequestValidationError):
+#     # You can format exc.errors() for a more custom response
+#     # For simplicity, returning a plain text response or a generic JSON
+#     error_details = exc.errors()
+#     return JSONResponse(
+#         status_code=400,
+#         content={"detail": "Validation Error", "errors": error_details}
+#     )
+```
+
+## Global Exception Handling
+
+1.  Global exception handlers MUST be defined using `@app.exception_handler(ExceptionType)` decorators.
+2.  Handlers SHOULD be provided for:
+    - Specific custom exceptions (e.g., `DomainError` and its subtypes) to map them to appropriate HTTP status codes and response formats.
+    - General `Exception` as a catch-all for unexpected server errors, which SHOULD return a generic 500 Internal Server Error response and log the actual error for debugging.
+    - Optionally, specific framework exceptions like `RequestValidationError` if default behavior needs to be overridden.
+3.  Error handlers MUST return a `Response` object (e.g., `JSONResponse`).
+4.  Sensitive error details SHOULD NOT be exposed in production responses; log them server-side instead.

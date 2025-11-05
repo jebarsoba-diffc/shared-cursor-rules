@@ -1,0 +1,165 @@
+---
+description: Python Web Operations (Controllers/Routers) Rules
+globs: **/web/operations/**/*.py
+alwaysApply: false
+---
+
+# Python Web Operations (Controllers/Routers) Rules
+
+## Purpose and Architecture
+
+Web Operations (often called Controllers or part of Routers in Python frameworks like FastAPI/Flask) act as the entry points for API requests. They bridge the HTTP layer and the application's core logic (Actions).
+
+Each Operation/Endpoint is responsible for:
+
+1.  Defining a specific API endpoint (route path and HTTP method).
+2.  Specifying the expected request structure (e.g., using Pydantic models for FastAPI) and ensuring incoming requests are validated.
+3.  Extracting relevant data from the request (path parameters, query parameters, body, headers, user context).
+4.  Invoking the appropriate Application Action via a dependency-injected `provider` or service locator.
+5.  Handling errors from request processing or Action execution, mapping them to appropriate HTTP responses.
+6.  Formatting and sending the HTTP response, often using framework-provided mechanisms and standardized response models.
+
+Operations SHOULD NOT contain business logic; this belongs in the Application Actions.
+
+## Structure and Implementation (FastAPI Example)
+
+1.  Each API endpoint function MUST handle a specific path + method combination.
+2.  Endpoints SHOULD be grouped logically, typically by domain, within router files (e.g., `src/api/routers/items_router.py`).
+3.  FastAPI uses decorators (`@router.get`, `@router.post`, etc.) to define path, method, response models, and status codes.
+4.  Request body, query parameters, and path parameters SHOULD be defined using Pydantic models and type hints for automatic validation and data conversion.
+5.  Dependencies (like `provider` or specific Actions) MUST be injected into endpoint functions using FastAPI's dependency injection system (e.g., `Depends`).
+
+```python
+# src/api/routers/items_router.py (FastAPI example)
+
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from pydantic import BaseModel
+from typing import List, Optional
+
+from src.core.actions.items import CreateItem, GetItem # Action dependencies
+from src.core.provider import Provider, get_provider # Dependency injection
+from src.core.domain.items import Item as DomainItem # Domain model
+from src.domain.errors import DomainError, ITEM_NOT_FOUND # Domain errors
+# from .items_json_representation import item_json_representation, items_json_representation # Response models/mappers
+
+# Pydantic model for request body
+class CreateItemRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+# Pydantic model for response (can also be the domain model directly if it's simple)
+class ItemResponse(BaseModel):
+    id: str
+    name: str
+    # description: Optional[str] # Example: field not exposed
+
+    class Config:
+        orm_mode = True # If mapping from ORM models or domain objects with similar attrs
+
+router = APIRouter(
+    prefix="/items",
+    tags=["items"],
+)
+
+# CORRECT Structure (FastAPI)
+@router.post("/", response_model=ItemResponse, status_code=status.HTTP_201_CREATED)
+async def create_item_operation(
+    item_data: CreateItemRequest,
+    provider: Provider = Depends(get_provider)
+):
+    action: CreateItem = provider.get_action(CreateItem) # Or directly provider.create_item
+    try:
+        # Assuming action.execute expects a dict or specific params
+        new_item: DomainItem = await action.execute(name=item_data.name, description=item_data.description)
+        # return item_json_representation(new_item) # Or map directly if ItemResponse matches
+        return ItemResponse.from_orm(new_item)
+    except DomainError as e:
+        # Specific error handling can be added here
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        # Log unexpected errors
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+
+@router.get("/{item_id}", response_model=ItemResponse)
+async def get_item_operation(
+    item_id: str,
+    provider: Provider = Depends(get_provider)
+):
+    action: GetItem = provider.get_action(GetItem)
+    try:
+        item = await action.execute(item_id=item_id)
+        if item is None:
+            raise ITEM_NOT_FOUND # Or a more specific error
+        # return item_json_representation(item)
+        return ItemResponse.from_orm(item)
+    except DomainError as e:
+        if e.code == ITEM_NOT_FOUND.code: # Example of specific domain error handling
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+
+# INCORRECT Structure (conceptual, not framework specific)
+class SomeOldController:
+    # Missing framework decorators, DI, Pydantic models
+    def handle_create_item(self, raw_request_data, service_locator):
+        # Manual parsing, validation, action instantiation - less robust
+        pass
+```
+
+## Handler (Endpoint Function) Implementation
+
+1.  The endpoint function MUST be `async` if it awaits Actions or other async operations.
+2.  It MUST declare parameters with type hints: path parameters, query parameters (using `Query` from FastAPI if needed), request body (as a Pydantic model).
+3.  Authenticated user data or other request-scoped context SHOULD be injected via `Depends` if available (e.g., `current_user: User = Depends(get_current_active_user)`).
+4.  It MUST retrieve the required Application Action instance(s) from the injected `provider` (e.g., `provider.get_action(CreateItemAction)` or `provider.create_item_action`).
+5.  It MUST call the `execute` method of the Action, passing the validated and extracted data.
+6.  It SHOULD use Pydantic models defined as `response_model` in the decorator for formatting the output. FastAPI handles serialization based on this.
+7.  It MUST include `try...except` blocks to handle potential errors (especially `DomainError` subclasses) from Action execution. These should be translated into `HTTPException` for FastAPI to generate appropriate error responses.
+
+## Dependencies and Validation
+
+1.  Operations receive all necessary dependencies (Actions, configurations) through FastAPI's `Depends` system, typically via a `provider` object.
+2.  Request body, path, and query parameter validation is automatically handled by FastAPI based on Pydantic models and type hints. Custom validators can be added to Pydantic models if needed.
+
+## Response Handling
+
+1.  FastAPI uses the `response_model` parameter in endpoint decorators (e.g., `@router.get("/", response_model=List[ItemResponse])`) to define the shape of the success response and to serialize the returned data.
+2.  For successful requests, simply return the data that conforms to the `response_model` (e.g., a Pydantic model instance, a list of them, or a domain object if `orm_mode=True` is used and fields match).
+3.  For errors, raise `HTTPException` with the appropriate `status_code` and `detail` message. Framework-level exception handlers can also be defined for custom error processing.
+4.  If domain objects need significant transformation before being sent as a response (i.e., the `response_model` Pydantic schema differs significantly from the domain model), dedicated mapping functions or methods on the Pydantic model (e.g., a `@classmethod from_domain(cls, domain_obj: DomainItem) -> 'ItemResponse':`) should be used. These are analogous to `itemJsonRepresentation`.
+
+```python
+# src/api/routers/items/items_response_models.py (or within the router file)
+
+from pydantic import BaseModel
+from typing import Optional, List
+from src.core.domain.items import Item as DomainItem # Actual domain model
+
+class ItemResponse(BaseModel):
+    id: str
+    name: str
+    # Note: 'description' from DomainItem might be intentionally omitted here
+
+    class Config:
+        orm_mode = True # Allows creating ItemResponse from DomainItem directly if attributes match
+
+    # Optional: A custom factory if mapping is complex
+    @classmethod
+    def from_domain(cls, item: DomainItem) -> 'ItemResponse':
+        return cls(id=item.id, name=item.name)
+
+def items_to_response_list(items: List[DomainItem]) -> List[ItemResponse]:
+    return [ItemResponse.from_domain(item) for item in items]
+```
+
+## Error Handling
+
+1.  The primary error handling within an endpoint function is `try...except` blocks that catch exceptions from Actions or other services.
+2.  Caught exceptions (especially `DomainError` or custom application exceptions) SHOULD be converted into `fastapi.HTTPException` with an appropriate HTTP status code and detail message.
+3.  FastAPI allows defining custom exception handlers (`@app.exception_handler(CustomError)`) for more centralized error processing if needed, which can convert custom errors to standard HTTP responses.
+4.  Common `DomainError` types (like `NOT_FOUND`, `VALIDATION_ERROR`, `UNAUTHORIZED`) should be consistently mapped to HTTP status codes (404, 400/422, 401/403 respectively).
+
+```
+
+```

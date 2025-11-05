@@ -1,0 +1,578 @@
+---
+description: Python API Domain Rules
+globs: **/core/domain/**/*.py
+alwaysApply: false
+---
+
+# Python API Domain Rules
+
+## ⚠️ CRITICAL: Read This First
+
+**Protocol classes and Abstract Base Classes in `/src/core/domain/` are CORRECT and VALID when they define infrastructure contracts.**
+
+The following patterns are **100% VALID** and should **NEVER** be flagged as violations:
+
+1. ✅ **Protocol classes for services** - Classes inheriting from `typing.Protocol` with method signatures (e.g., `Embeddings`, `Logger`, `Clock`)
+2. ✅ **Abstract Base Classes for repositories** - Classes inheriting from `abc.ABC` with abstract methods (e.g., `Users`, `Codebases`, `Commits`)
+3. ✅ **Protocols with supporting types** - Enums, dataclasses, and TypedDicts in the same file (e.g., `LogLevel` with `Logger`)
+4. ✅ **Protocols/ABCs without implementations** - Pure contract definitions with only type signatures
+
+**DO NOT suggest:**
+
+- Converting Protocol/ABC classes to concrete classes with `create()` methods
+- Moving Protocol/ABC classes to separate folders
+- Adding `@classmethod create()` to Protocol/ABC classes (they are contracts, not entities)
+- Adding private `__init__` to Protocol classes (Protocols don't have implementations)
+
+**Only FLAG as violations:**
+
+- ❌ Concrete domain entity classes with public `__init__` (should use `@classmethod create()`)
+- ❌ Domain entity classes missing `@classmethod create()` factory method
+- ❌ Implementation classes in the domain folder (implementations belong in `/src/core/infrastructure/`)
+
+## Purpose and Structure
+
+**IMPORTANT:** The domain layer in this architecture focuses on **data structures and contracts**, NOT business logic. Business logic belongs in the **Actions layer** (`/src/core/actions/`).
+
+**CRITICAL:** Infrastructure contracts (Protocol classes, ABCs) **MUST** reside in the domain folder. This is the correct implementation of Dependency Inversion Principle - the domain defines what it needs, and infrastructure implements it.
+
+The domain layer contains three types of files:
+
+### 1. Domain Error Definitions
+
+Domain error files define domain-specific error classes that are used throughout the application. Each error module should:
+
+1. **Define custom exception classes** that inherit from `Exception` or a base `DomainError` class
+2. **Use descriptive names** in PascalCase (e.g., `CodebaseNotFound`, `InvalidRepositoryUrl`)
+3. **Be organized by domain** in files like `errors.py` within domain folders
+4. **Be lightweight** - typically just class definitions with optional error messages
+
+Example:
+
+```python
+# /src/core/domain/codebase/errors.py
+
+class DomainError(Exception):
+    """Base domain error"""
+    pass
+
+# Entity not found errors
+class CodebaseNotFound(DomainError):
+    """Raised when codebase cannot be found"""
+    pass
+
+class CommitNotFound(DomainError):
+    """Raised when commit cannot be found"""
+    pass
+
+# Validation errors
+class InvalidCodebaseId(DomainError):
+    """Raised when codebase ID is invalid"""
+    pass
+
+class InvalidRepositoryUrl(DomainError):
+    """Raised when repository URL is invalid"""
+    pass
+```
+
+### 2. Domain Entities
+
+Domain entities represent business entities of the application. Each domain entity should:
+
+1. **Be a class** with a singular, PascalCase name (e.g., `User`, `Order`, `Chunk`)
+2. **Use a private-by-convention `__init__`** to control instantiation - store attributes with a single leading underscore (`_attribute_name`)
+3. **Define a `@classmethod create()` method** as the primary way to instantiate the object, accepting a dataclass or TypedDict for parameters
+4. **Expose properties using `@property` decorators** for getters, and `@<property_name>.setter` for setters where mutation is allowed
+5. **Ensure immutability** by omitting setters for properties that should not change after instantiation
+6. **Perform domain-specific validation** within the `create` method, raising specific `DomainError` subclasses
+7. **Reside in an appropriate domain folder** that matches the domain name (e.g., `items/` for `Item`, `users/` for `User`)
+8. **Avoid direct dependencies on infrastructure** - type hints should refer to primitives, other domain objects, or Protocol/ABC interfaces
+
+### 3. Infrastructure Contracts (Protocol Classes and Abstract Base Classes)
+
+**CRITICAL:** Infrastructure contracts **MUST** reside in the `/src/core/domain/` directory. These are NOT violations - they are the correct implementation of the Dependency Inversion Principle.
+
+**IMPORTANT DISTINCTION:**
+
+- **Protocol/ABC in domain folder** = Infrastructure contract (CORRECT ✅)
+- **Concrete class in domain folder** = Domain entity (must follow entity rules with `@classmethod create()`)
+- **Concrete class implementing Protocol/ABC in infrastructure folder** = Infrastructure implementation (CORRECT ✅)
+
+Infrastructure contracts define interfaces for external dependencies (repositories, services, queues, etc.) that will be implemented in the infrastructure layer. These contracts:
+
+1. **MUST be Protocol classes or Abstract Base Classes** that define method signatures without implementation
+2. **Use descriptive names** that indicate their infrastructure role:
+   - Repository pattern: Plural entity names (e.g., `Users`, `Codebases`, `Orders`, `Commits`)
+   - Service pattern: Descriptive service names (e.g., `Logger`, `Embeddings`, `NotificationService`)
+3. **Define only method signatures** using `@abstractmethod` (for ABC) or just type signatures (for Protocol)
+4. **Return domain entities or primitives**, never infrastructure-specific types
+5. **Enable dependency inversion** by allowing the domain to define its needs without depending on concrete implementations
+6. **MUST reside in the domain folder** - either at `/src/core/domain/` root OR in domain subfolders
+7. **MAY include supporting types** in the same file (Enum, dataclass, TypedDict, etc.)
+
+**Important:** Supporting types (Enum classes, dataclasses, TypedDicts) that are used exclusively by an infrastructure contract should be defined in the same file. This is correct and should NOT be flagged as a violation.
+
+## Examples
+
+### Example 1: Domain Entity
+
+```python
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, Any, Optional
+from src.core.domain.codebase.errors import DomainError
+
+@dataclass(frozen=True)
+class ChunkParams:
+    id: str
+    file_name: str
+    page_number: int
+    content: str
+    metadata: Dict[str, Any]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+class Chunk:
+    """Domain entity for text chunks"""
+
+    def __init__(
+        self,
+        id: str,
+        file_name: str,
+        page_number: int,
+        content: str,
+        metadata: Dict[str, Any],
+        created_at: datetime,
+        updated_at: Optional[datetime],
+    ):
+        # Private attributes by convention
+        self._id = id
+        self._file_name = file_name
+        self._page_number = page_number
+        self._content = content
+        self._metadata = metadata
+        self._created_at = created_at
+        self._updated_at = updated_at
+
+    @classmethod
+    def create(cls, params: ChunkParams) -> 'Chunk':
+        """Factory method for creating Chunk instances with validation"""
+        if not params.id:
+            raise DomainError('Chunk ID is required')
+        if not params.file_name:
+            raise DomainError('Chunk must have a file name')
+        if params.page_number < 1:
+            raise DomainError('Page number must be a positive integer')
+
+        return cls(
+            id=params.id,
+            file_name=params.file_name,
+            page_number=params.page_number,
+            content=params.content,
+            metadata=params.metadata or {},
+            created_at=params.created_at,
+            updated_at=params.updated_at
+        )
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    @property
+    def file_name(self) -> str:
+        return self._file_name
+
+    @file_name.setter
+    def file_name(self, file_name: str):
+        if not file_name:
+            raise DomainError('File name cannot be empty')
+        self._file_name = file_name
+
+    @property
+    def page_number(self) -> int:
+        return self._page_number
+
+    @property
+    def content(self) -> str:
+        return self._content
+
+    @content.setter
+    def content(self, content: str):
+        if not content:
+            raise DomainError('Content cannot be empty')
+        self._content = content
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        # Return a copy to prevent external mutation
+        return self._metadata.copy()
+
+    @metadata.setter
+    def metadata(self, metadata: Dict[str, Any]):
+        self._metadata = metadata
+
+    @property
+    def created_at(self) -> datetime:
+        return self._created_at
+
+    @property
+    def updated_at(self) -> Optional[datetime]:
+        return self._updated_at
+
+    @updated_at.setter
+    def updated_at(self, updated_at: Optional[datetime]):
+        self._updated_at = updated_at
+```
+
+### Example 2: Repository Protocol (Repository Pattern)
+
+```python
+from typing import Protocol, Optional, List
+from src.core.domain.user.user import User
+
+class Users(Protocol):
+    """Repository contract for user persistence"""
+
+    async def save(self, user: User) -> None:
+        """Save a user to the repository"""
+        ...
+
+    async def find_by_id(self, id: str) -> Optional[User]:
+        """Find user by ID"""
+        ...
+
+    async def find_by_email(self, email: str) -> Optional[User]:
+        """Find user by email"""
+        ...
+
+    async def find_all(self) -> List[User]:
+        """Get all users"""
+        ...
+
+    async def delete(self, id: str) -> None:
+        """Delete a user"""
+        ...
+
+    async def exists(self, id: str) -> bool:
+        """Check if user exists"""
+        ...
+```
+
+**✅ This is CORRECT:**
+
+- Protocol class defining repository contract
+- Plural name indicating repository pattern
+- Only method signatures, no implementation
+- Resides in `/src/core/domain/user/users.py`
+- This should NOT be flagged as a violation
+
+### Example 3: Service ABC (Service Pattern)
+
+```python
+from abc import ABC, abstractmethod
+from typing import Dict, Any
+from src.core.domain.order.order import Order
+
+class PaymentGateway(ABC):
+    """Service contract for payment processing"""
+
+    @abstractmethod
+    async def process_payment(self, order: Order, token: str) -> Dict[str, Any]:
+        """Process a payment"""
+        pass
+
+    @abstractmethod
+    async def refund_payment(self, transaction_id: str, amount: float) -> Dict[str, Any]:
+        """Refund a payment"""
+        pass
+
+    @abstractmethod
+    async def validate_payment_method(self, token: str) -> bool:
+        """Validate payment method"""
+        pass
+```
+
+**✅ This is CORRECT:**
+
+- ABC class defining service contract
+- Abstract methods with no implementation
+- Returns domain entities and primitives
+- Resides in `/src/core/domain/payment/` folder
+- This should NOT be flagged as a violation
+
+### Example 4: Protocol with Supporting Types (Real Example Pattern)
+
+**File:** `/src/core/domain/logger.py`
+
+```python
+from typing import Protocol, List, Dict, Any, Optional
+from enum import Enum
+from dataclasses import dataclass
+from datetime import datetime
+
+class LogLevel(Enum):
+    """Log levels for the logging system"""
+    ERROR = "error"
+    WARN = "warn"
+    INFO = "info"
+    DEBUG = "debug"
+
+@dataclass(frozen=True)
+class LogEntry:
+    """Log entry data structure"""
+    level: LogLevel
+    message: str
+    timestamp: datetime
+    metadata: Optional[Dict[str, Any]] = None
+
+class Logger(Protocol):
+    """Infrastructure contract for logging service"""
+
+    async def get_logs(self, last_lines: int) -> List[str]:
+        """Get recent log lines"""
+        ...
+
+    async def log(self, level: LogLevel, message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Log a message"""
+        ...
+
+    async def error(self, message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Log an error"""
+        ...
+
+    async def warn(self, message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Log a warning"""
+        ...
+
+    async def info(self, message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Log info"""
+        ...
+
+    async def debug(self, message: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Log debug message"""
+        ...
+```
+
+**✅ This is CORRECT:**
+
+- Logger is a Protocol defining a service contract
+- LogLevel Enum and LogEntry dataclass are supporting types
+- All reside in `/src/core/domain/logger.py`
+- This should NOT be flagged as a violation
+
+### Example 5: Simple Service Protocol (Minimal Pattern)
+
+**File:** `/src/core/domain/embeddings/embeddings.py`
+
+```python
+from typing import Protocol, List
+
+class Embeddings(Protocol):
+    """Service contract for text embeddings"""
+
+    async def embed(self, text: str) -> List[float]:
+        """Generate embeddings for text"""
+        ...
+```
+
+**✅ This is CORRECT:**
+
+- Simple Protocol with single method
+- Defines contract for embeddings service
+- No `@classmethod create()` method needed (it's a Protocol, not an entity)
+- This is an infrastructure contract, NOT a domain entity
+- Resides in `/src/core/domain/embeddings/` which is CORRECT
+- **DO NOT suggest converting to concrete class or adding create() method**
+
+### Example 6: Another Simple Service Protocol
+
+**File:** `/src/core/domain/clock.py`
+
+```python
+from typing import Protocol
+from datetime import datetime
+
+class Clock(Protocol):
+    """Service contract for time operations"""
+
+    def now(self) -> datetime:
+        """Get current datetime"""
+        ...
+```
+
+**✅ This is CORRECT:**
+
+- Minimal Protocol class
+- Defines contract for time service
+- This should NOT be flagged as a violation
+
+## Additional Best Practices
+
+### For Domain Entities:
+
+- **Validation:** Ensure values are valid in the `@classmethod create()` method - use specific `DomainError` subclasses
+- **Data Focus:** Domain entities should focus on data structure and basic validation, NOT complex business logic
+- **Business Logic Separation:** Complex business logic belongs in the Actions layer
+- **Immutability:** Prefer immutability - only add setters when the domain concept requires mutation
+- **Consistency:** Follow the same structure (`@classmethod create`, `@property`, `_<attr>`) across all domain entities
+- **No Side Effects:** Domain entities should not have direct dependencies on infrastructure (DB, APIs, etc.)
+- **Simple Behavior Only:** Entities may contain simple methods for state manipulation, but avoid complex workflows
+
+### For Infrastructure Contracts (Protocol/ABC):
+
+- **Dependency Inversion:** Contracts should be defined by the domain based on what it needs, not what infrastructure provides
+- **Technology Agnostic:** Method signatures should not expose implementation details (SQL, HTTP, etc.)
+- **Domain Focus:** Methods should accept and return domain entities, primitives, or simple data structures
+- **Clear Contracts:** Method names should clearly express intent from the domain's perspective
+- **No Implementation:** Protocol/ABC classes should only define method signatures, never contain implementation logic
+- **Use Protocol for simplicity:** Prefer `typing.Protocol` over `abc.ABC` when possible for duck typing support
+
+## ❌ Common False Positives (DO NOT Flag These as Violations)
+
+The following patterns are **CORRECT** and should **NOT** be flagged as violations:
+
+### ✅ Protocol Classes at Domain Root
+
+Files like `/src/core/domain/logger.py`, `/src/core/domain/clock.py` containing Protocol classes are infrastructure contracts that correctly reside at the domain root.
+
+**DO NOT suggest moving these to:**
+
+- `ports/` folder (we don't use a ports folder)
+- `infrastructure/` folder (that's where implementations go, not contracts)
+- Any other location
+
+### ✅ Repository Protocols/ABCs with Plural Names
+
+Protocol or ABC classes like `Users`, `Codebases`, `Commits`, `Orders` that define repository operations are correctly placed in domain folders. The plural name indicates this is a repository contract, not a domain entity.
+
+**Example:**
+
+```python
+from typing import Protocol, Optional
+from src.core.domain.user.user import User
+
+class Users(Protocol):
+    """Repository contract"""
+    async def save(self, user: User) -> None: ...
+    async def find_by_id(self, id: str) -> Optional[User]: ...
+```
+
+### ✅ Supporting Types with Infrastructure Contracts
+
+Enums, dataclasses, and TypedDicts that support Protocol/ABC classes should be in the same file:
+
+**Correct patterns:**
+
+- `LogLevel` Enum with `Logger` Protocol
+- `LogEntry` dataclass with `Logger` Protocol
+- Parameter dataclasses/TypedDicts with service Protocols
+
+**DO NOT flag these supporting types as violations.**
+
+### ✅ Service Protocol/ABC Classes
+
+Protocol or ABC classes with names like `NotificationService`, `PaymentGateway`, `Embeddings`, `Clock` are service contracts and correctly belong in the domain layer.
+
+### ✅ Simple Protocols with One or Few Methods
+
+Any Protocol class in the domain folder that:
+
+- Has only method signatures with `...` (no implementations)
+- Returns primitives, domain entities, or simple structures
+- Does NOT have `@classmethod create()` (Protocols are contracts, not entities)
+- Does NOT have implementation code
+
+**Is a VALID infrastructure contract and should NOT be flagged.**
+
+**Examples of VALID simple Protocols:**
+
+```python
+# CORRECT - simple service Protocol
+class Embeddings(Protocol):
+    async def embed(self, text: str) -> List[float]: ...
+
+# CORRECT - simple service Protocol
+class Clock(Protocol):
+    def now(self) -> datetime: ...
+
+# CORRECT - simple service Protocol
+class IdGenerator(Protocol):
+    def generate(self) -> str: ...
+```
+
+**Remember:** Protocols and ABCs define contracts. Concrete classes implement behavior. In the domain folder, Protocols/ABCs are for infrastructure contracts.
+
+## 🚫 Actual Violations (DO Flag These)
+
+### ❌ Domain Entities with Public `__init__` (No Factory Method)
+
+```python
+# WRONG - domain entity with public __init__ and no create() factory
+class User:
+    def __init__(self, id: str, name: str):
+        self.id = id  # Public attributes
+        self.name = name
+```
+
+**Why wrong:**
+
+- No `@classmethod create()` factory method
+- No validation
+- Public attributes instead of private with `@property`
+
+### ❌ Concrete Implementation Classes in Domain Folder
+
+```python
+# WRONG - implementation class in domain folder
+class DatabaseLogger(Logger):
+    """Concrete implementation of Logger"""
+
+    def __init__(self, db_connection):
+        self.db = db_connection
+
+    async def log(self, level: LogLevel, message: str) -> None:
+        # Database implementation here
+        await self.db.insert_log(level, message)
+```
+
+**Why wrong:**
+
+- This is an implementation, not a contract or entity
+- Belongs in `/src/core/infrastructure/`, not `/src/core/domain/`
+
+### ❌ Missing Factory Method on Domain Entity
+
+```python
+# WRONG - domain entity without @classmethod create()
+class Product:
+    def __init__(self, id: str, name: str, price: float):
+        self._id = id
+        self._name = name
+        self._price = price
+
+    # Missing: @classmethod create(cls, params: ProductParams) -> 'Product'
+
+    @property
+    def id(self) -> str:
+        return self._id
+```
+
+**Why wrong:**
+
+- Domain entity missing required `@classmethod create()` factory method
+- No validation during instantiation
+
+### ❌ Protocol/ABC with Implementation
+
+```python
+# WRONG - Protocol with implementation code
+class Users(Protocol):
+    async def save(self, user: User) -> None:
+        # WRONG - Protocols should not have implementation
+        database.save(user)
+```
+
+**Why wrong:**
+
+- Protocols should only have method signatures with `...`
+- Implementation belongs in infrastructure layer
