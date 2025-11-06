@@ -60,6 +60,32 @@ cp .cursor/rules/application_setup.mdc /path/to/your/project/.cursor/rules/
 - **`python/pyproject_toml_fixed_dependencies.mdc`** - Rules for managing fixed dependencies in `pyproject.toml` files
 - **`python/python.mdc`** - General Python code review criteria and standards
 
+### TypeScript Rules
+
+#### Core API Rules
+- **`typescript/api_core_actions.mdc`** - Standards and patterns for TypeScript API Actions in `core/actions` directory structure
+- **`typescript/api_core_actions_test.mdc`** - Testing standards and patterns for TypeScript API Actions tests in `core_test/actions` directory structure
+- **`typescript/api_core_domain.mdc`** - Standards and patterns for TypeScript API Domain layer in `core/domain` directory structure
+- **`typescript/api_core_infrastructure.mdc`** - Standards and patterns for TypeScript API Infrastructure layer in `core/infrastructure` directory structure
+- **`typescript/api_core_postgres.mdc`** - Standards and patterns for TypeScript Postgres infrastructure implementations in `core/infrastructure/postgres` directory structure
+- **`typescript/api_core_tests.mdc`** - Testing strategy and standards for TypeScript core tests in `core_test` directory structure
+- **`typescript/api_core_utils.mdc`** - Standards and patterns for TypeScript utility functions in `core/utils` directory structure
+
+#### HTTP/Server Rules
+- **`typescript/api_http_operations.mdc`** - Standards and patterns for TypeScript Web Operations (Controllers/Routers) in `http/operations` directory structure
+- **`typescript/api_http_operations_test.mdc`** - Testing standards and patterns for TypeScript HTTP Operations tests in `http_test` directory structure
+- **`typescript/api_http_server.mdc`** - Standards and patterns for TypeScript HTTP Server (Application Setup) in `http/server` directory structure
+
+#### Web Frontend Rules
+- **`typescript/web_core_actions.mdc`** - Standards and patterns for TypeScript Web Core Actions in `web/src/core/actions` directory structure
+- **`typescript/web_core_actions_testing.mdc`** - Testing standards and patterns for TypeScript Web Core Actions tests in `web/src/core_spec/actions` directory structure
+- **`typescript/web_react_screens.mdc`** - Standards and patterns for React screen components in `web/src/web/screens` directory structure
+- **`typescript/web_react_screens_testing.mdc`** - Testing standards and patterns for React screen component tests in `web/src/web_spec/screens` directory structure
+
+#### General/Config Rules
+- **`typescript/typescript.mdc`** - General TypeScript code review criteria and standards
+- **`typescript/package_json_fixed_dependencies.mdc`** - Rules for managing fixed dependencies in `package.json` files
+
 ## Contributing
 
 1. Add new rule files to the `.cursor/rules/` directory
