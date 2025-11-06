@@ -1,0 +1,401 @@
+---
+description: API Domain Rules
+globs: **/core/domain/**/*.ts,**/core/domain/**/*.tsx
+alwaysApply: false
+---
+
+# API Domain Rules
+
+## ⚠️ CRITICAL: Read This First
+
+**TypeScript interfaces in `/src/core/domain/` are CORRECT and VALID when they define infrastructure contracts.**
+
+The following patterns are **100% VALID** and should **NEVER** be flagged as violations:
+
+1. ✅ **Simple service interfaces** - Interfaces with method signatures returning Promises (e.g., `Embeddings`, `Logger`, `Clock`)
+2. ✅ **Repository interfaces** - Interfaces with CRUD operations (e.g., `Users`, `Codebases`, `Commits`)
+3. ✅ **Interfaces with supporting types** - Enums and helper interfaces in the same file (e.g., `LogLevel` with `Logger`)
+4. ✅ **Interfaces without implementations** - Pure contract definitions with no implementation
+
+**DO NOT suggest:**
+- Converting interfaces to classes
+- Moving interfaces to `ports/`, `infrastructure/`, or any other folder
+- Adding private constructors to interfaces (impossible in TypeScript)
+- Adding `static create()` methods to interfaces (interfaces cannot have implementations)
+
+**Only FLAG as violations:**
+- ❌ Classes with public constructors (should be private)
+- ❌ Domain entity classes missing static `create()` method
+- ❌ Implementation classes in the domain folder (implementations belong in `/src/core/infrastructure/`)
+
+## Purpose and Structure
+
+**IMPORTANT:** The domain layer in this architecture focuses on **data structures and contracts**, NOT business logic. Business logic belongs in the **Actions layer** (`/src/core/actions/`).
+
+**CRITICAL:** Infrastructure interfaces (repositories, services) **MUST** reside in the domain folder. This is the correct implementation of Dependency Inversion Principle - the domain defines what it needs, and infrastructure implements it.
+
+The domain layer contains three types of files:
+
+### 1. Domain Error Definitions (Errors.ts)
+Domain error files define domain-specific error constants that are used throughout the application. Each `Errors.ts` file should:
+
+1. **Be named exactly `Errors.ts`** and located in the appropriate domain folder.
+2. **Import `DomainError`** from `@/core/domain/DomainError`.
+3. **Export error constants** as `new DomainError(...)` instances with descriptive, uppercase names.
+4. **Use shared instances** - each error constant is a singleton that can be thrown from different locations.
+5. **Group related errors** with comments to improve readability.
+6. **Follow naming conventions** - error names should be descriptive and use UPPER_SNAKE_CASE.
+
+Example:
+```typescript
+import DomainError from "@/core/domain/DomainError"
+
+// Entity not found errors
+export const CODEBASE_NOT_FOUND = new DomainError("CODEBASE_NOT_FOUND")
+export const COMMIT_NOT_FOUND = new DomainError("COMMIT_NOT_FOUND")
+
+// Validation errors
+export const INVALID_CODEBASE_ID = new DomainError("INVALID_CODEBASE_ID")
+export const INVALID_REPOSITORY_URL = new DomainError("INVALID_REPOSITORY_URL")
+
+// Operation errors
+export const CANNOT_CREATE_CODEBASE = new DomainError("CANNOT_CREATE_CODEBASE")
+export const CODEBASE_ALREADY_EXISTS = new DomainError("CODEBASE_ALREADY_EXISTS")
+```
+
+**IMPORTANT:** These error constants are shared instances (singletons), meaning the same `DomainError` instance will be thrown from different parts of the codebase. This is intentional and correct for this architecture.
+
+### 2. Domain Entities
+Domain entities represent business entities of the application. Each Domain entity should:
+
+1. **Be a class** with a singular, capitalized name (e.g., `User`, `Order`, `Chunk`).
+2. **Use a private constructor** with TypeScript private properties to enforce controlled instantiation.
+3. **Define a static `create` method** to instantiate the object, using a structured type declaration (`Params` type) in the same file.
+4. **Expose properties via getters and setters**, with names starting in uppercase. Read-only properties should not have setters.
+5. **Ensure immutability when appropriate**, using `readonly` for properties that should not be modified after instantiation.
+6. **Use domain-specific validation** inside the `create` method to ensure valid state at creation time.
+7. **Reside in an appropriate domain folder** that MUST match the domain name of the use case (e.g., `items` for `Item`, `users` for `User`).
+8. **Avoid direct dependencies on external modules** (e.g., database models, HTTP responses) to maintain domain purity.
+
+### 3. Infrastructure Interfaces (Repository and Service Contracts)
+
+**CRITICAL:** Infrastructure interfaces **MUST** reside in the `/src/core/domain/` directory. These are NOT violations - they are the correct implementation of the Dependency Inversion Principle.
+
+**IMPORTANT DISTINCTION:**
+- **Interface in domain folder** = Infrastructure contract (CORRECT ✅)
+- **Class in domain folder** = Domain entity (must follow entity rules with private constructor + static create)
+- **Class implementing interface in infrastructure folder** = Infrastructure implementation (CORRECT ✅)
+
+Infrastructure interfaces define contracts for external dependencies (repositories, services, queues, etc.) that will be implemented in the infrastructure layer. These interfaces:
+
+1. **MUST be interfaces** (not classes) that define contracts for infrastructure implementations
+2. **Use descriptive names** that indicate their infrastructure role:
+   - Repository pattern: Plural entity names (e.g., `Users`, `Codebases`, `Orders`, `Commits`)
+   - Service pattern: Descriptive service names (e.g., `NotificationService`, `PaymentGateway`, `Logger`, `Telemetry`)
+3. **Define only method signatures** without implementation details
+4. **Return domain entities or primitives**, never infrastructure-specific types
+5. **Enable dependency inversion** by allowing the domain to define its needs without depending on concrete implementations
+6. **MUST reside in the domain folder** - either at `/src/core/domain/` root OR in domain subfolders (e.g., `/src/core/domain/user/`)
+7. **MAY include supporting types and enums** in the same file needed for the interface contracts (e.g., `LogLevel`, `LogEntry`, `TelemetryEvent`)
+
+**Important:** Supporting types (enums, type aliases, helper interfaces) that are used exclusively by an infrastructure interface should be defined in the same file as the interface. This is correct and should NOT be flagged as a violation.
+
+## Examples
+
+### Example 1: Domain Entity
+
+```typescript
+export default class Chunk {
+    private constructor(
+        private readonly id: string,
+        private fileName: string,
+        private readonly pageNumber: number,
+        private content: string,
+        private metadata: Record<string, unknown>,
+        private readonly createdAt: Date,
+        private updatedAt: Date | null,
+    ) {}
+
+    static create(params: ChunkParams): Chunk {
+        const { id, fileName, pageNumber, content, metadata, createdAt, updatedAt } = params
+
+        if (!id) throw new Error('Chunk ID is required')
+        if (!fileName) throw new Error('Chunk must have a file name')
+        if (pageNumber < 1) throw new Error('Page number must be a positive integer')
+
+        return new Chunk(id, fileName, pageNumber, content, metadata ?? {}, createdAt, updatedAt ?? null)
+    }
+
+    get Id(): string {
+        return this.id
+    }
+
+    get FileName(): string {
+        return this.fileName
+    }
+
+    set FileName(fileName: string) {
+        if (!fileName) throw new Error('File name cannot be empty')
+        this.fileName = fileName
+    }
+
+    get PageNumber(): number {
+        return this.pageNumber
+    }
+
+    get Content(): string {
+        return this.content
+    }
+
+    set Content(content: string) {
+        if (!content) throw new Error('Content cannot be empty')
+        this.content = content
+    }
+
+    get Metadata(): Record<string, unknown> {
+        return this.metadata
+    }
+
+    set Metadata(metadata: Record<string, unknown>) {
+        this.metadata = metadata
+    }
+
+    get CreatedAt(): Date {
+        return this.createdAt
+    }
+
+    get UpdatedAt(): Date | null {
+        return this.updatedAt
+    }
+
+    set UpdatedAt(updatedAt: Date | null) {
+        this.updatedAt = updatedAt
+    }
+}
+
+export type ChunkParams = {
+    id: string
+    fileName: string
+    pageNumber: number
+    content: string
+    metadata?: Record<string, unknown>
+    createdAt: Date
+    updatedAt?: Date
+}
+```
+
+### Example 2: Infrastructure Interface (Repository Pattern)
+
+```typescript
+import type User from "@/core/domain/user/User"
+
+// Infrastructure interface for user persistence
+export default interface Users {
+    save(user: User): Promise<void>
+    findById(id: string): Promise<User | null>
+    findByEmail(email: string): Promise<User | null>
+    findAll(): Promise<User[]>
+    delete(id: string): Promise<void>
+    exists(id: string): Promise<boolean>
+}
+```
+
+### Example 3: Infrastructure Interface (Service Pattern)
+
+```typescript
+import type Order from "@/core/domain/order/Order"
+import type { PaymentResult } from "@/core/domain/payment/PaymentResult"
+
+// Infrastructure interface for external payment processing
+export default interface PaymentGateway {
+    processPayment(order: Order, token: string): Promise<PaymentResult>
+    refundPayment(transactionId: string, amount: number): Promise<PaymentResult>
+    validatePaymentMethod(token: string): Promise<boolean>
+}
+```
+
+### Example 4: Infrastructure Interface with Supporting Types (Real Example from Codebase)
+
+**File:** `/src/core/domain/Logger.ts`
+
+```typescript
+// Supporting enum for the Logger interface
+export enum LogLevel {
+    ERROR = "error",
+    WARN = "warn",
+    INFO = "info",
+    DEBUG = "debug",
+}
+
+// Supporting type for the Logger interface
+export interface LogEntry {
+    level: LogLevel
+    message: string
+    timestamp: number
+    metadata?: Record<string, any>
+}
+
+// Infrastructure interface for logging service
+// This interface resides in /src/core/domain/ which is CORRECT
+export default interface Logger {
+    getLogs(lastLines: number): Promise<string[]>
+    log(level: LogLevel, message: string, metadata?: Record<string, any>): Promise<void>
+    error(message: string, metadata?: Record<string, any>): Promise<void>
+    warn(message: string, metadata?: Record<string, any>): Promise<void>
+    info(message: string, metadata?: Record<string, any>): Promise<void>
+    debug(message: string, metadata?: Record<string, any>): Promise<void>
+}
+```
+
+**✅ This is CORRECT:**
+- Logger is an infrastructure interface defining a service contract
+- LogLevel enum and LogEntry interface are supporting types
+- All reside in `/src/core/domain/Logger.ts`
+- This should NOT be flagged as a violation
+
+### Example 5: Simple Service Interface (Minimal Pattern)
+
+**File:** `/src/core/domain/embeddings/Embeddings.ts`
+
+```typescript
+export default interface Embeddings {
+    embed(text: string): Promise<number[]>
+}
+```
+
+**✅ This is CORRECT:**
+- Simple interface with single method
+- Defines contract for embeddings service
+- No class, no constructor, no static create method needed
+- This is an infrastructure interface, NOT a domain entity
+- Resides in `/src/core/domain/embeddings/` which is CORRECT
+- **DO NOT suggest converting to class or adding create() method**
+
+### Example 6: Another Simple Service Interface
+
+**File:** `/src/core/domain/Clock.ts`
+
+```typescript
+export default interface Clock {
+    now(): Date
+}
+```
+
+**✅ This is CORRECT:**
+- Minimal infrastructure interface
+- Defines contract for time service
+- This should NOT be flagged as a violation
+
+## Additional Best Practices
+
+### For Domain Entities:
+- **Validation:** Ensure values are valid when passed into the `create` method to prevent invalid domain objects.
+- **Data Focus:** Domain entities should primarily focus on data structure and basic validation, NOT complex business logic.
+- **Business Logic Separation:** Complex business logic belongs in the Actions layer, not in domain entities.
+- **Immutability:** Use `readonly` for fields that should never change after instantiation.
+- **Consistency:** Follow the same structure across all domain objects to improve maintainability.
+- **No Side Effects:** The domain model should not have direct dependencies on infrastructure (e.g., database, HTTP).
+- **Simple Behavior Only:** Domain entities may contain simple getters/setters and basic validation, but avoid complex business workflows.
+
+### For Infrastructure Interfaces:
+- **Dependency Inversion:** Interfaces should be defined by the domain based on what it needs, not what the infrastructure provides.
+- **Technology Agnostic:** Interface methods should not expose implementation details (e.g., SQL queries, HTTP specifics).
+- **Domain Focus:** Methods should accept and return domain entities, primitives, or simple data structures.
+- **Clear Contracts:** Method names should clearly express intent from the domain's perspective.
+- **No Implementation:** Interfaces should only define method signatures, never contain implementation logic.
+
+## ❌ Common False Positives (DO NOT Flag These as Violations)
+
+The following patterns are **CORRECT** and should **NOT** be flagged as violations:
+
+### ✅ Infrastructure Interfaces at Domain Root
+Files like `/src/core/domain/Logger.ts`, `/src/core/domain/Clock.ts` are infrastructure interfaces that correctly reside at the domain root. These define contracts for cross-cutting infrastructure concerns.
+
+**DO NOT suggest moving these to:**
+- `ports/` folder (we don't use a ports folder)
+- `infrastructure/` folder (that's where implementations go, not interfaces)
+- Any other location
+
+### ✅ Repository Interfaces with Plural Names
+Interfaces like `Users`, `Codebases`, `Commits`, `Orders` that define repository operations are correctly placed in domain folders. The plural name indicates this is a repository interface, not a domain entity.
+
+**Example:**
+```typescript
+import type User from "./User"
+
+export default interface Users {
+    save(user: User): Promise<void>
+    findById(id: string): Promise<User | null>
+}
+```
+
+### ✅ Supporting Types with Infrastructure Interfaces
+Enums, type aliases, and helper interfaces that support infrastructure interfaces should be in the same file:
+
+**Correct patterns:**
+- `LogLevel` enum with `Logger` interface
+- `LogEntry` interface with `Logger` interface
+- `TelemetryEvent` type with `Telemetry` interface
+
+**DO NOT flag these supporting types as violations.**
+
+### ✅ Service Interfaces
+Interfaces with names like `NotificationService`, `PaymentGateway`, `ServiceInfo`, `PromptClient`, `Embeddings` are service contracts and correctly belong in the domain layer.
+
+### ✅ Simple Interfaces with One or Few Methods
+Any TypeScript interface in the domain folder that:
+- Has only method signatures (no implementations)
+- Returns Promises or primitives
+- Does NOT have a constructor (interfaces cannot have constructors)
+- Does NOT have implementation code
+
+**Is a VALID infrastructure interface and should NOT be flagged.**
+
+**Examples of VALID simple interfaces:**
+```typescript
+// CORRECT - simple service interface
+export default interface Embeddings {
+    embed(text: string): Promise<number[]>
+}
+
+// CORRECT - simple service interface
+export default interface Clock {
+    now(): Date
+}
+
+// CORRECT - simple service interface
+export default interface IdGenerator {
+    generate(): string
+}
+```
+
+**Remember:** Interfaces define contracts. Classes implement behavior. In the domain folder, interfaces are for infrastructure contracts.
+
+## 🚫 Actual Violations (DO Flag These)
+
+### ❌ Domain Entities with Public Constructors
+```typescript
+// WRONG - domain entity with public constructor
+export default class User {
+    constructor(public id: string, public name: string) {}
+}
+```
+
+### ❌ Classes in Domain That Should Be Infrastructure
+```typescript
+// WRONG - implementation class in domain folder
+export default class DatabaseLogger implements Logger {
+    async log(message: string) {
+        // database implementation
+    }
+}
+```
+
+### ❌ Missing Static Create Method
+```typescript
+// WRONG - domain entity without static create method
+export default class Product {
+    private constructor(private id: string) {}
+    // Missing: static create(params: ProductParams): Product
+}
+```

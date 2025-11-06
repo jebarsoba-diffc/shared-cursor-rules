@@ -1,0 +1,104 @@
+---
+description: Package.json Fixed Dependencies Rule
+globs: **/package.json
+alwaysApply: false
+---
+
+# Package.json Fixed Dependencies Rule
+
+## Purpose and Requirements
+
+Package.json files MUST use fixed dependency versions without version range operators (caret ^, tilde ~, or any other flexible version specifications) to ensure reproducible builds and consistent deployments.
+
+**CRITICAL**: Jest is deprecated. All projects must use **Vitest** for testing. Any reference to Jest dependencies (jest, @types/jest, ts-jest, etc.) must be replaced with Vitest equivalents (vitest, @vitest/ui, etc.).
+
+## Fixed Version Requirements
+
+1. **Dependencies MUST use exact versions**: All entries in `dependencies`, `devDependencies`, `peerDependencies`, and `optionalDependencies` sections MUST specify exact version numbers.
+
+2. **Forbidden version operators**:
+   - Caret operator (`^`) - e.g., `^1.2.3`
+   - Tilde operator (`~`) - e.g., `~1.2.3`
+   - Greater than (`>`) - e.g., `>1.2.3`
+   - Greater than or equal (`>=`) - e.g., `>=1.2.3`
+   - Less than (`<`) - e.g., `<1.2.3`
+   - Less than or equal (`<=`) - e.g., `<=1.2.3`
+   - Wildcard (`*` or `x`) - e.g., `1.2.*`
+   - Range operators (`-`) - e.g., `1.2.3 - 2.3.4`
+   - Git URLs, file paths, or other non-semver specifications
+
+3. **Required format**: Versions MUST follow semantic versioning format: `MAJOR.MINOR.PATCH` (e.g., `1.2.3`)
+
+## Examples
+
+### CORRECT - Fixed versions
+```json
+{
+  "dependencies": {
+    "express": "4.18.2",
+    "lodash": "4.17.21",
+    "react": "18.2.0"
+  },
+  "devDependencies": {
+    "typescript": "5.0.4",
+    "@types/node": "18.15.11",
+    "vitest": "0.29.8"
+  }
+}
+```
+
+### INCORRECT - Flexible versions
+```json
+{
+  "dependencies": {
+    "express": "^4.18.2",        // Caret operator forbidden
+    "lodash": "~4.17.21",        // Tilde operator forbidden
+    "react": ">=18.0.0",         // Range operator forbidden
+    "vue": "latest",             // Non-semver forbidden
+    "axios": "*"                 // Wildcard forbidden
+  },
+  "devDependencies": {
+    "typescript": ">5.0.0",      // Comparison operator forbidden
+    "@types/node": "18.x",       // Wildcard forbidden
+    "vitest": "0.29.8 - 0.30.0"  // Range forbidden
+  }
+}
+```
+
+## Validation Rules
+
+1. **Scan all dependency sections**: Check `dependencies`, `devDependencies`, `peerDependencies`, and `optionalDependencies`
+
+2. **Version format validation**: Each version string MUST:
+   - Start with a digit (not an operator)
+   - Follow semantic versioning pattern: `\d+\.\d+\.\d+`
+   - Not contain any forbidden operators or wildcards
+
+3. **Error reporting**: Flag any dependency that uses:
+   - Version range operators (`^`, `~`, `>`, `>=`, `<`, `<=`)
+   - Wildcards (`*`, `x`)
+   - Non-semver strings (`latest`, `next`, etc.)
+   - Git URLs or file paths
+   - Range specifications with `-`
+
+## Rationale
+
+Fixed dependency versions ensure:
+- **Reproducible builds**: Same code produces identical results across environments
+- **Consistent deployments**: Production matches development and testing environments
+- **Security predictability**: Known versions can be audited and tracked
+- **Debugging reliability**: Issues can be reproduced with identical dependency states
+- **Supply chain security**: Prevents automatic updates that might introduce vulnerabilities
+
+## Migration Guide
+
+To fix flexible versions:
+1. Run `npm list` or `yarn list` to see currently installed exact versions
+2. Update package.json to use those exact versions
+3. Delete `node_modules` and package-lock.json/yarn.lock
+4. Run `npm install` or `yarn install` to regenerate lock files
+5. Commit both package.json and lock files to ensure consistency
+
+## Exceptions
+
+No exceptions are allowed. All dependencies MUST use fixed versions for reliable and secure deployments.

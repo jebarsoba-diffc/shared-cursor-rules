@@ -1,0 +1,319 @@
+---
+description: API Infrastructure Implementation Rules
+globs: **/core/infrastructure/**/*.ts,**/core/infrastructure/**/*.tsx
+alwaysApply: false
+---
+
+# API Infrastructure Implementation Rules
+
+## Purpose and Structure
+
+Infrastructure implementations handle external integrations, data storage, and any non-domain-specific concerns. These implementations should:
+
+1. **Implement a domain interface** to ensure dependency inversion and maintain a clear separation of concerns.
+   - **Exception**: External service client classes that provide direct communication with external APIs or services do NOT require a domain interface. These are low-level infrastructure clients that are used by higher-level domain services.
+   - **Identifying external clients**: Classes ending with "Client" suffix (e.g., `AzureOpenAiClient`, `PromptClient`, `PostgresClient`) are typically external service clients and do not need domain interfaces.
+   - **Example of interface required**: `PostgresCodebases implements Codebases` (domain repository)
+   - **Example of no interface required**: `AzureOpenAiClient`, `PromptClient`, `HttpClient` (external service clients)
+   - **InMemoryRemote implementations**: Classes prefixed with "InMemoryRemote" (e.g., `InMemoryRemoteUsers`, `InMemoryRemoteConfigurationItems`) are in-memory implementations that simulate BOTH local database operations AND remote external service queries. These are test infrastructure that implement domain interfaces to avoid mocks in tests.
+2. **Use constructor injection** for dependencies like database clients, HTTP clients, or external services (e.g., `PostgresClient`, `OpenAIClient`).
+3. **Encapsulate external service logic** to abstract implementation details from the domain layer.
+4. **Map domain objects** to and from external representations when necessary.
+5. **Use parameterized queries and secure API calls** to prevent injection vulnerabilities.
+6. **Handle errors explicitly** with meaningful logging and exception handling.
+7. **Ensure immutability of dependencies** by marking them as `readonly`.
+8. **Avoid embedding business logic** within infrastructure classes; business logic should reside in domain services.
+9. **Optimize performance** by implementing proper caching, batching, or rate-limiting strategies where applicable.
+10. **Follow domain-driven naming conventions** to keep implementation details aligned with domain concepts.
+
+## Example: Postgres Repository
+
+```typescript
+import Chunk from "@/core/domain/chunks/Chunk"
+import Chunks, { ChunkWithSimilarity, SearchParams } from "@/core/domain/chunks/Chunks"
+import type PostgresClient from "@/core/infrastructure/postgres/PostgresClient"
+
+export default class PostgresChunks implements Chunks {
+    private readonly tableName = "chunks"
+
+    constructor(private readonly postgresClient: PostgresClient) {}
+
+    async put(chunk: Chunk, embedding: number[]): Promise<void> {
+        const data = {
+            id: chunk.Id,
+            file_name: chunk.FileName,
+            page_number: chunk.PageNumber,
+            content: chunk.Content,
+            created_at: chunk.CreatedAt,
+            updated_at: chunk.UpdatedAt,
+        }
+
+        if (chunk.UpdatedAt) {
+            await this.postgresClient.updateWithEmbedding(
+                this.tableName,
+                data,
+                embedding,
+                `id = $1`,
+                [chunk.Id]
+            )
+        } else {
+            await this.postgresClient.insertWithEmbedding(this.tableName, data, embedding)
+        }
+    }
+
+    private mapToDomain(chunk: Record<string, any>): Chunk {
+        return Chunk.create({
+            id: chunk.id,
+            fileName: chunk.file_name,
+            pageNumber: chunk.page_number,
+            content: chunk.content,
+            createdAt: chunk.created_at,
+            updatedAt: chunk.updated_at,
+        })
+    }
+}
+```
+
+## Example: OpenAI LLM Client
+
+```typescript
+import LLM from "@/core/domain/llm/LLM"
+import OpenAIClient from "@/core/infrastructure/llm/OpenAIClient"
+
+export default class OpenAIService implements LLM {
+    constructor(private readonly openAIClient: OpenAIClient) {}
+
+    async generateText(prompt: string, model: string, temperature = 0.7): Promise<string> {
+        try {
+            const response = await this.openAIClient.generate({
+                prompt,
+                model,
+                temperature,
+            })
+            return response.text
+        } catch (error) {
+            console.error("OpenAI API Error:", error)
+            throw new Error("Failed to generate text from OpenAI")
+        }
+    }
+}
+```
+
+## Example: InMemoryRemote Repository (Test Infrastructure)
+
+```typescript
+import type Logger from "@/core/domain/Logger"
+import type ConfigurationItem from "@/core/domain/configuration_item/ConfigurationItem"
+import type ConfigurationItems from "@/core/domain/configuration_item/ConfigurationItems"
+import type { ConfigurationItemFields, ConfigurationItemWithSimilarity, SearchParams } from "@/core/domain/configuration_item/ConfigurationItems"
+
+/**
+ * In-memory implementation of ConfigurationItems repository for testing purposes.
+ *
+ * This implementation serves dual purposes:
+ * 1. Stores configuration items with embeddings for vector similarity search (local DB operations)
+ * 2. Stores configuration item fields (assignment group, product line) to simulate remote service queries
+ *
+ * In production:
+ * - PostgresConfigurationItems handles local DB operations (put, getById, findSimilar)
+ * - RemoteConfigurationItems handles remote queries (getFieldsByName)
+ *
+ * In tests:
+ * - This class simulates BOTH to avoid mocks and keep tests fast and deterministic
+ *
+ * Note: Remote repository implementations use lowercase naming convention (e.g., remoteUsers, remoteConfigurationItems)
+ * when passed as constructor parameters to maintain consistency with other dependencies.
+ */
+export default class InMemoryRemoteConfigurationItems implements ConfigurationItems {
+    private items: Map<string, ConfigurationItem> = new Map()
+    private embeddings: Map<string, number[]> = new Map()
+    private configItemFields: Map<string, ConfigurationItemFields> = new Map()
+
+    constructor(private readonly logger: Logger) {}
+
+    // Local database operations
+    async put(configurationItem: ConfigurationItem, embedding: number[]): Promise<void> {
+        this.items.set(configurationItem.Id, configurationItem)
+        this.embeddings.set(configurationItem.Id, embedding)
+    }
+
+    async getById(id: string): Promise<ConfigurationItem | null> {
+        this.logger.info(`Getting configuration item by id ${id}`)
+        return this.items.get(id) || null
+    }
+
+    async findSimilar(embedding: number[], threshold: number, limit: number): Promise<ConfigurationItemWithSimilarity[]> {
+        const similarities: [string, number][] = Array.from(this.embeddings.entries()).map(([id, storedEmbedding]) => {
+            const similarity = this.cosineSimilarity(embedding, storedEmbedding)
+            return [id, similarity]
+        })
+
+        return similarities
+            .filter(([, similarity]) => similarity >= threshold)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, limit)
+            .map(([id, similarity]) => ({
+                configurationItem: this.items.get(id)!,
+                similarity,
+            }))
+            .filter((result) => result.configurationItem !== undefined)
+    }
+
+    // Remote service operations (simulated)
+    async getFieldsByName(configItemName: string): Promise<ConfigurationItemFields> {
+        const fields = this.configItemFields.get(configItemName)
+        if (!fields) {
+            throw new Error(`No configuration item found for name: ${configItemName}`)
+        }
+        return fields
+    }
+
+    // Test helper for setting up remote data
+    setConfigItemFields(configItemName: string, fields: ConfigurationItemFields): void {
+        this.configItemFields.set(configItemName, fields)
+    }
+
+    async clear(): Promise<void> {
+        this.items.clear()
+        this.embeddings.clear()
+        this.configItemFields.clear()
+    }
+
+    private cosineSimilarity(a: number[], b: number[]): number {
+        if (a.length !== b.length) {
+            throw new Error("Embeddings must have the same length")
+        }
+
+        const dotProduct = a.reduce((sum, val, i) => sum + val * b[i], 0)
+        const magnitudeA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0))
+        const magnitudeB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0))
+
+        return dotProduct / (magnitudeA * magnitudeB)
+    }
+}
+```
+
+## Example: InMemoryRemote Simple Repository
+
+```typescript
+import type Users from "@/core/domain/user/Users"
+
+/**
+ * In-memory implementation of Users repository for testing purposes.
+ * Simulates remote user service queries without external dependencies.
+ *
+ * In production, RemoteUsers queries the remote user service.
+ * In tests, this class provides the same interface with in-memory storage.
+ *
+ * This is test infrastructure for actions that need user lookups from remote systems.
+ *
+ * Note: Remote repository class names follow the pattern Remote{Entity} (e.g., RemoteUsers, RemoteOrders).
+ * When used as constructor parameters, use lowercase naming (e.g., remoteUsers, remoteOrders).
+ */
+export default class InMemoryRemoteUsers implements Users {
+    private userSysIds: Map<string, string> = new Map()
+
+    async getUserSysId(username: string): Promise<string> {
+        if (!username || username.trim() === "") {
+            throw new Error("Username cannot be empty")
+        }
+
+        const sysId = this.userSysIds.get(username)
+        if (!sysId) {
+            throw new Error(`User ${username} not found`)
+        }
+        return sysId
+    }
+
+    // Test helper for setting up data
+    setUserSysId(username: string, sysId: string): void {
+        this.userSysIds.set(username, sysId)
+    }
+
+    hasUser(username: string): boolean {
+        return this.userSysIds.has(username)
+    }
+
+    clear(): void {
+        this.userSysIds.clear()
+    }
+}
+```
+
+## Additional Best Practices
+
+- **Encapsulate dependencies** to prevent external libraries from leaking into the domain layer.
+- **Use environment variables** for API keys and sensitive configurations.
+- **Implement rate-limiting or retries** for network requests to handle external API failures.
+- **Ensure proper logging and monitoring** to track failures in infrastructure services.
+- **Keep infrastructure code as stateless as possible** to improve scalability.
+
+## InMemoryRemote Pattern for Testing
+
+### Purpose
+InMemoryRemote implementations serve as test infrastructure that simulates both local database operations AND remote external service queries. This pattern:
+
+1. **Eliminates the need for mocks** in action tests
+2. **Keeps tests fast and deterministic** by avoiding network calls
+3. **Provides realistic behavior** that mirrors production implementations
+4. **Supports test data setup** through helper methods
+
+### When to Use InMemoryRemote
+- When a domain interface is implemented by multiple production classes (e.g., `PostgresRepository` for local data, `RemoteServiceClient` for external queries)
+- When actions need to interact with both local and remote data sources
+- When you want to test the full behavior without external dependencies
+
+### Key Characteristics
+- **Class Naming**: Prefix with `InMemoryRemote` (e.g., `InMemoryRemoteUsers`, `InMemoryRemoteOrders`, `InMemoryRemoteConfigurationItems`)
+- **Parameter Naming**: Use lowercase for remote repositories in constructor parameters (e.g., `remoteUsers`, `remoteOrders`, `remoteConfigurationItems`)
+- **Production Class Naming**: Remote repository classes follow pattern `Remote{Entity}` (e.g., `RemoteUsers`, `RemoteOrders`, `RemoteProducts`)
+- **Location**: Place in `/src/core/infrastructure/in_memory_remote/` directory
+- **Implements domain interface**: Must implement the same interface as production implementations
+- **Test helpers**: Provide setup methods (e.g., `setUserSysId()`, `setConfigItemFields()`) for test data
+- **Clean state**: Include `clear()` method to reset state between tests
+
+### Directory Structure
+```
+src/core/infrastructure/
+├── in_memory/              # Pure in-memory repositories (local data only)
+│   ├── InMemoryCodebases.ts
+│   ├── InMemoryCommits.ts
+│   └── InMemoryOrders.ts
+├── in_memory_remote/       # In-memory repositories simulating remote services
+│   ├── InMemoryRemoteUsers.ts
+│   ├── InMemoryRemoteProducts.ts
+│   └── InMemoryRemoteConfigurationItems.ts
+├── postgres/               # PostgreSQL implementations (local data)
+│   ├── PostgresCodebases.ts
+│   ├── PostgresCommits.ts
+│   └── PostgresOrders.ts
+└── remote/                 # Remote service repository implementations
+    ├── RemoteUsers.ts
+    ├── RemoteProducts.ts
+    └── RemoteConfigurationItems.ts
+```
+
+### Naming Convention Examples
+```typescript
+// Production class names
+export default class RemoteUsers implements Users { }
+export default class RemoteProducts implements Products { }
+export default class RemoteOrders implements Orders { }
+
+// Test class names
+export default class InMemoryRemoteUsers implements Users { }
+export default class InMemoryRemoteProducts implements Products { }
+export default class InMemoryRemoteOrders implements Orders { }
+
+// Usage in constructor parameters (camelCase)
+class SomeAction {
+    constructor(
+        private readonly remoteUsers: Users,          // Remote repository
+        private readonly remoteProducts: Products,    // Remote repository
+        private readonly orders: Orders,              // Local repository
+        private readonly logger: Logger
+    ) {}
+}
+```
+
+These rules ensure that infrastructure implementations remain **modular, maintainable, and resilient** while following **Hexagonal Architecture** principles.

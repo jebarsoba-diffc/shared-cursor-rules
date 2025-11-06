@@ -1,0 +1,123 @@
+---
+description: Web React Screens
+globs: **/web/src/web/screens/**/*.ts,**/web/src/web/screens/**/*.tsx
+alwaysApply: false
+---
+
+# Web React Screens
+
+## Overview
+This document defines the standards and best practices for React screen components in the web application layer.
+
+## Scope
+- **Target Files**: `web/src/web/screens/**/*.tsx`
+- **Purpose**: Main UI screens that handle user interactions and display business data
+- **Architecture**: Component-based React screens with Material-UI styling
+
+## Code Review Standards
+
+### 1. Component Structure
+- **Default Export**: Each screen component must be a default export function
+- **Provider Pattern**: Screen components must accept a `provider` prop with typed provider interface
+- **TypeScript**: Use proper TypeScript typing for all props, state, and function parameters
+- **Import Organization**: 
+  1. Core actions and domain types
+  2. Web components and utilities
+  3. External libraries (Material-UI, React Router, etc.)
+  4. React hooks and React imports
+
+### 2. State Management
+- **Local State**: Use `useState` for component-local state management
+- **Event Handlers**: Use `useCallback` for event handlers to prevent unnecessary re-renders
+- **Side Effects**: Use `useEffect` for data fetching and side effects
+- **Loading States**: Implement proper loading indicators for async operations
+- **Error Handling**: Handle error states with user-friendly error messages using `extractErrorMessage`
+
+### 3. UI Components & Styling
+- **Material-UI**: Use Material-UI components consistently (`@mui/material`)
+- **Icons**: Use Material-UI icons (`@mui/icons-material`)
+- **Design System**: Follow Material Design patterns for layout and spacing
+- **Theming**: Use `useTheme` hook for theme-aware styling
+- **Responsive Design**: Implement responsive design with proper breakpoints
+
+### 4. Data Handling
+- **Dependency Injection**: Use provider pattern for dependency injection
+- **Pagination**: Implement proper pagination for large datasets (standard page size: 20)
+- **Error Handling**: Use `extractErrorMessage` utility for consistent error handling
+- **Notifications**: Display user notifications using `useNotification` hook
+- **Loading Indicators**: Show loading states during async operations
+
+### 5. Navigation
+- **React Router**: Use React Router hooks (`useNavigate`, `useParams`) for navigation
+- **URL Parameters**: Implement proper URL parameter handling and validation
+- **Programmatic Navigation**: Use programmatic navigation for user actions
+- **State Consistency**: Maintain navigation state consistency across the application
+
+### 6. Accessibility
+- **ARIA Labels**: Use proper ARIA labels and roles for screen readers
+- **Keyboard Navigation**: Implement keyboard navigation support
+- **Semantic HTML**: Use semantic HTML elements where appropriate
+- **Focus Management**: Provide proper focus management for interactive elements
+- **Tooltips**: Include helpful tooltips for interactive elements
+
+### 7. Performance
+- **Memoization**: Implement proper memoization where appropriate (`useMemo`, `useCallback`)
+- **Lazy Loading**: Use lazy loading for heavy components
+- **Re-render Optimization**: Optimize re-renders with proper dependency arrays
+- **Data Structures**: Use efficient data structures for state management
+
+## Examples
+
+### Component Structure Example
+```tsx
+import type { ProviderType } from "@/core/Provider"
+import type GetItems from "@/core/actions/item/GetItems"
+import { useNotification } from "@/web/contexts/NotificationsContext"
+import { Box, Typography } from "@mui/material"
+import { useCallback, useEffect, useState } from "react"
+
+type Props = {
+    provider: Pick<ProviderType, "getItems">
+}
+
+export default function ExampleScreen({ provider }: Props) {
+    const { showNotification } = useNotification()
+    const [loading, setLoading] = useState(false)
+    
+    const handleAction = useCallback(async () => {
+        // Implementation
+    }, [])
+    
+    return (
+        <Box>
+            <Typography variant="h4">Screen Title</Typography>
+            {/* Screen content */}
+        </Box>
+    )
+}
+```
+
+### Error Handling Example
+```tsx
+try {
+    const result = await provider.someAction()
+    // Handle success
+} catch (error) {
+    const errorMessage = extractErrorMessage(error)
+    showNotification(errorMessage, "error")
+}
+```
+
+## Review Checklist
+
+- [ ] Component uses default export
+- [ ] Provider prop is properly typed
+- [ ] All TypeScript types are properly defined
+- [ ] Import statements are organized correctly
+- [ ] Loading states are implemented
+- [ ] Error handling is implemented
+- [ ] Material-UI components are used consistently
+- [ ] Navigation hooks are used properly
+- [ ] Accessibility features are implemented
+- [ ] Performance optimizations are applied
+- [ ] Code follows established patterns from existing screens

@@ -1,0 +1,174 @@
+---
+description: HTTP Server Rules
+globs: **/http/server/**/*.ts,**/http/server/**/*.tsx
+alwaysApply: false
+---
+
+# HTTP Server Rules
+
+## Purpose and Architecture
+
+The `server.ts` file is responsible for initializing and configuring the Express.js web server instance. Its primary tasks include:
+
+1.  Creating the main Express application object.
+2.  Setting up essential global middleware (CORS, body parsing, URL encoding, custom authentication).
+3.  Dynamically registering all defined API routes (Operations) with the Express router.
+4.  Integrating request validation middleware.
+5.  Defining and attaching a global error handling middleware.
+
+The server setup should be environment-aware where necessary (e.g., CORS configuration based on environment variables).
+
+## Structure and Key Functions
+
+1.  The file MUST export an `async` function that accepts the `ProviderType` as its single argument and returns a Promise.
+2.  The function MUST orchestrate the setup by calling internal helper functions for middleware setup and route registration.
+3.  Helper functions SHOULD be used to logically group setup steps (e.g., `setupMiddleware`, `registerRoutes`, `setupCors`). These helpers SHOULD NOT be exported.
+4.  A validation middleware factory function (`validateSchema`) MUST be defined to handle Joi schema validation for request bodies.
+
+```typescript
+// src/http/server.ts
+
+// CORRECT Structure
+import express, { type Express, type NextFunction, type Request, type Response } from "express"
+// ... other imports ...
+import type { ProviderType } from "../core/provider"
+import ALL_OPERATIONS from "@/http/Operations"
+import { writeJsonErrorResponse } from "@/http/operations/json_response"
+import Joi from "joi" // Required for validation schema type
+
+// Main exported function
+export async function createServer(provider: ProviderType): Promise<Express> {
+    const server = express()
+
+    // Calls helper functions for organization
+    setupMiddleware(server, provider)
+    registerRoutes(server, provider)
+
+    // Registers the final error handler
+    server.use(errorHandler)
+
+    return server
+}
+
+// Helper for middleware
+function setupMiddleware(server: Express, provider: ProviderType) {
+    // ... implementation ...
+}
+
+// Helper for CORS
+function setupCors(server: Express) {
+    // ... implementation ...
+}
+
+// Helper for routes
+function registerRoutes(server: Express, provider: ProviderType) {
+    // ... implementation ...
+}
+
+// Validation middleware factory
+const validateSchema = (schema: Joi.ObjectSchema) => {
+    return (req: Request, res: Response, next: NextFunction) => {
+        // ... implementation ...
+    }
+}
+
+// Global error handler
+const errorHandler = (err: Error, _req: Request, res: Response, next: NextFunction) => {
+    // ... implementation ...
+}
+
+
+// INCORRECT Structure
+// All setup logic directly inside createServer without helpers
+export async function createServer(provider: ProviderType): Promise<Express> {
+    const server = express()
+
+    // CORS setup inline
+    if (process.env.WEB_CORS_ORIGIN) {
+        // ... cors logic ...
+        server.use(cors(corsOptions))
+    }
+    // Body parser inline
+    server.use(bodyParser.json())
+    // Auth middleware inline
+    server.use(createAuthMiddleware(provider)) // Assuming createAuthMiddleware exists
+
+    // Route registration loop inline
+    for (const operation of ALL_OPERATIONS) {
+       // ... route registration logic ...
+    }
+
+    // No separate global error handler or validation middleware defined/used clearly
+    // Error handling might be missing or inconsistently applied
+
+    return server
+}
+
+```
+
+## Middleware Configuration (`setupMiddleware`)
+
+1.  Standard middleware SHOULD be applied before custom application middleware.
+2.  Essential middleware includes:
+    *   CORS configuration (conditionally applied based on `process.env.WEB_CORS_ORIGIN`).
+    *   Custom middleware like `createAuthMiddleware(provider)`.
+3.  Middleware order matters. Body parsers should typically come before middleware that needs to access the parsed body (like the route handlers or validation). Auth middleware should come early enough to protect routes.
+
+## Route Registration (`registerRoutes`)
+
+1.  Routes MUST be registered by iterating over a collection of `Operation` instances (e.g., `ALL_OPERATIONS` imported from `src/http/Operations.ts`).
+2.  For each `Operation`, its `path`, `method`, `handler`, and `schema` properties MUST be used.
+3.  The correct router method (`server.get`, `server.post`, etc.) MUST be used based on the `operation.method`.
+4.  The `handler` method from the `Operation` instance MUST be wrapped in a new function closure `(req: Request, res: Response) => handler(req, res, provider)` to correctly pass the `provider` instance.
+5.  If an `operation.schema` is defined (and not `NO_SCHEMA`), the `validateSchema(schema)` middleware MUST be applied *before* the route handler function.
+
+```typescript
+// src/http/server.ts - registerRoutes function
+
+// CORRECT Route Registration
+function registerRoutes(server: Express, provider: ProviderType) {
+    for (const operation of ALL_OPERATIONS) { // Iterates over defined operations
+        const { method, path, handler, schema } = operation
+        // Wraps handler to inject provider
+        const routeHandler = (req: Request, res: Response) => handler(req, res, provider)
+
+        // Selects correct HTTP method function
+        if (method === GET_METHOD) { // Assumes GET_METHOD = 'get'
+            // Applies validation middleware conditionally before handler
+            server.get(path, schema ? [validateSchema(schema), routeHandler] : routeHandler)
+        } else { // Example assumes only GET/POST for brevity
+            server.post(path, schema ? [validateSchema(schema), routeHandler] : routeHandler)
+        }
+    }
+}
+
+// INCORRECT Route Registration
+function registerRoutes(server: Express, provider: ProviderType) {
+    // Manually defining routes instead of iterating Operations
+    server.get("/items", (req, res) => {/* handler logic inline */});
+    server.post("/items", validateSchema(/* some schema */), (req, res) => {/* handler logic inline */} ); // Logic duplicated
+
+    // Incorrect handler wrapping - provider might be unavailable
+    server.get("/users/:id", GetUserOperation.handler); // Incorrect: static access or missing provider
+
+    // Validation middleware applied inconsistently or incorrectly
+    server.post("/orders", (req, res) => { // Missing validation middleware
+        // ... handler logic ...
+    });
+}
+```
+
+## Validation Middleware (`validateSchema`)
+
+1.  This function MUST accept a `Joi.ObjectSchema` as an argument and return an Express middleware function `(req: Request, res: Response, next: NextFunction)`.
+2.  The returned middleware MUST validate `req.body` against the provided `schema`.
+3.  On validation success, it MUST call `next()` to pass control to the next middleware (the route handler).
+4.  On validation failure, it MUST immediately send an error response using `writeJsonErrorResponse`. It SHOULD extract a user-friendly error message (e.g., from `error.details[0].message`). It MUST NOT call `next(error)`.
+
+## Global Error Handling (`errorHandler`)
+
+1.  This middleware function MUST have the Express error handling signature `(err: Error, req: Request, res: Response, next: NextFunction)`.
+2.  It MUST be registered using `server.use()` *after* all routes have been registered.
+3.  It SHOULD log the error details for debugging purposes (`console.error(err)`).
+4.  It MUST check if headers have already been sent (`res.headersSent`). If so, it MUST pass the error to the default Express error handler by calling `next(err)`.
+5.  If headers have not been sent, it MUST send a standardized error response using `writeJsonErrorResponse(res, err)`.

@@ -1,0 +1,180 @@
+---
+description: Web Operations Rules
+globs: **/http/operations/**/*.ts,**/http/operations/**/*.tsx
+alwaysApply: false
+---
+
+# Web Operations Rules
+
+## Purpose and Architecture
+
+Web Operations act as the controllers or entry points for API requests. They bridge the gap between the HTTP layer and the application's core logic (Actions). Each Operation is responsible for:
+
+1.  Defining a specific API endpoint (route path and HTTP method). **All Operations MUST use the POST HTTP method for consistency, even for actions that would traditionally use GET.**
+    *   **Exception:** `GET_METHOD` MAY be used only for special cases such as service info, health check, or log retrieval endpoints (e.g., `GetServiceInfoOperation`, `HealthCheckOperation`, or operations for getting logs). All other operations MUST use `POST_METHOD`.
+2.  Specifying the expected request structure and validating incoming requests.
+3.  Extracting relevant data from the request.
+4.  Invoking the appropriate Application Action via the `provider`.
+5.  Handling errors during request processing or Action execution.
+6.  Formatting and sending the HTTP response using standardized helpers.
+
+Operations SHOULD NOT contain business logic; this belongs in the Application Actions.
+
+## Structure and Base Class
+
+1.  Each Operation MUST handle exactly one API endpoint (path + method combination).
+2.  Operations MUST reside in an appropriate domain folder structure (e.g., operations for Items should be in `/operations/items`).
+3.  Operations MUST extend the abstract `Operation` class (`src/http/Operation.ts`).
+4.  Operations MUST implement the following abstract properties:
+    *   `path`: A string representing the URL path (e.g., `/items`, `/users/:id`).
+    *   `method`: The HTTP method (`POST_METHOD` imported from `@/http/Operation`). **All Operations MUST use `POST_METHOD`.**
+    *   `schema`: A Joi schema (`ObjectSchema` from `joi`) defining the expected structure of the request body. Use `NO_SCHEMA` (imported from `@/http/Operation`) if no body validation is required.
+5.  Operations MUST implement the abstract `handler` method.
+
+```typescript
+// src/http/operations/items/CreateItemOperation.ts
+
+import type CreateItem from "@/core/actions/items/CreateItem" // Action dependency
+import type { ProviderType } from "@/core/provider"
+import { Operation, POST_METHOD, NO_SCHEMA } from "@/http/Operation" // Base class and constants
+import { writeJsonErrorResponse, writeJsonSuccessResponse } from "@/http/operations/json_response" // Response helpers
+import type { Request, Response } from "express"
+import Joi from "joi" // Schema definition
+
+// CORRECT Structure
+export default class CreateItemOperation extends Operation {
+    // Defines the specific endpoint
+    path = "/items"
+    method = POST_METHOD // All operations MUST use POST_METHOD
+
+    // Defines the expected request body structure
+    schema = Joi.object({
+        name: Joi.string().required(),
+        description: Joi.string().optional(),
+    })
+
+    // Implements the request handling logic
+    async handler(req: Request, res: Response, provider: ProviderType): Promise<void> {
+        // ... implementation ...
+    }
+}
+
+// FORBIDDEN: Using GET_METHOD is not allowed
+export default class GetSomethingOperation extends Operation {
+    path = "/something"
+    method = GET_METHOD // ❌ FORBIDDEN: Only POST_METHOD is allowed
+    schema = NO_SCHEMA
+    async handler(req: Request, res: Response, provider: ProviderType): Promise<void> {
+        // ... implementation ...
+    }
+}
+
+// CORRECT: Even for 'get' semantics, use POST_METHOD
+export default class GetSomethingOperation extends Operation {
+    path = "/something"
+    method = POST_METHOD // ✅ CORRECT: Always use POST_METHOD
+    schema = Joi.object({
+        id: Joi.string().required(),
+    })
+    async handler(req: Request, res: Response, provider: ProviderType): Promise<void> {
+        // ... implementation ...
+    }
+}
+
+// INCORRECT Structure
+export class GetItemsOperation { // Missing 'extends Operation'
+    // Missing path, method, schema properties
+    // Handler signature might be incorrect or missing
+    async handleGetItems(request: Request, response: Response, serviceProvider: ProviderType): Promise<void> {
+        // ... implementation ...
+    }
+}
+```
+
+## Handler Method Implementation
+
+1.  The `handler` method MUST be `async` and have the signature `async handler(req: Request, res: Response, provider: ProviderType): Promise<void>`.
+2.  It MUST extract necessary data from the `req` object (`req.body`, `req.params`, `req.query`, `res.locals.authUser`, etc.). Assume `req.body` is validated by the `schema` and middleware.
+3.  It MUST retrieve the required Application Action instance(s) from the `provider` object (e.g., `provider.createItem`).
+4.  It MUST call the `execute` method of the Action, passing the required data.
+5.  It MUST use the standard JSON response helper functions (`writeJsonOkResponse`, `writeJsonSuccessResponse`, `writeJsonErrorResponse` from `@/http/operations/json_response`) to send the final response.
+6.  It SHOULD use dedicated representation functions (like `itemsJsonRepresentation`) to format domain objects returned by Actions into the desired JSON structure for the API response, preventing leakage of internal domain details.
+7.  It MUST include a `try...catch` block to handle potential errors from the Action execution or other processing steps. The `catch` block MUST call `writeJsonErrorResponse`.
+
+```typescript
+// src/http/operations/items/GetItemOperation.ts
+
+// CORRECT Handler Implementation
+async handler(req: Request, res: Response, provider: ProviderType): Promise<void> {
+    try {
+        // 1. Extract data
+        const itemId = req.params.id 
+
+        // 2. Get Action from provider
+        const action: GetItem = provider.getItem 
+
+        // 3. Execute Action
+        const item = await action.execute(itemId)
+
+        // 4. Format response using representation and helpers
+        writeJsonOkResponse(res, itemJsonRepresentation(item)) // Assuming itemJsonRepresentation exists
+
+    } catch (error) {
+        // 5. Handle errors
+        writeJsonErrorResponse(res, error)
+    }
+}
+
+// INCORRECT Handler Implementation
+async handler(req: Request, res: Response, provider: ProviderType): Promise<void> {
+    // Missing try...catch block
+
+    const itemId = req.params.id
+    const action: GetItem = provider.getItem // Correct
+
+    const item = await action.execute(itemId) // Error here will crash the request if not caught
+
+    // Directly sending domain object
+    // Manual status/type setting instead of helpers
+    res.status(200).type("application/json").json(item) 
+}
+```
+
+## Dependencies and Validation
+
+1.  Operations receive all necessary dependencies (Actions, configurations) through the `provider` object passed to the `handler`. Do not instantiate Actions or Services directly within the Operation.
+2.  Request body validation MUST be performed using the `schema` property defined in the Operation class, handled automatically by the routing middleware (`validateSchema` in `server.ts`). Do not manually validate the schema within the `handler`.
+3.  Query parameter or path parameter validation (beyond basic type checks inferred by routing) should ideally be handled within the Action if it constitutes a business rule, or potentially with a more specific Joi schema if complex validation is needed before hitting the action.
+
+## Response Handling
+
+1.  Always use the shared helper functions for sending responses:
+    *   `writeJsonOkResponse(res, data)`: For successful requests returning data (e.g., GET single/list, PUT, POST returning created object). `data` should be the result of a representation function if applicable.
+    *   `writeJsonSuccessResponse(res)`: For successful requests that don't need to return specific data (e.g., DELETE, some POSTs/PUTs).
+    *   `writeJsonErrorResponse(res, error)`: For handling any caught errors.
+2.  Use representation functions (e.g., `itemsJsonRepresentation`) located near the operations (`src/http/operations/{domain}/`) to map domain objects to plain JavaScript objects suitable for JSON serialization. This isolates the API contract from the internal domain model.
+
+```typescript
+// src/http/operations/items/items_json_representation.ts
+
+import type Item from "@/core/domain/items/Item"
+
+// CORRECT: Maps domain object to API structure
+export function itemJsonRepresentation(item: Item): object {
+    return {
+        id: item.id,
+        name: item.name,
+        // description is NOT exposed in this representation
+    }
+}
+
+export function itemsJsonRepresentation(items: Item[]): object[] {
+    return items.map(itemJsonRepresentation)
+}
+```
+
+## Error Handling
+
+1.  The primary error handling mechanism within an Operation is the `try...catch` block surrounding the Action execution in the `handler`.
+2.  The `catch` block MUST call `writeJsonErrorResponse(res, error)`. This helper function standardizes error responses and handles logging.
+3.  Operations SHOULD NOT attempt to interpret specific `DomainError` types unless there's a strong need to map them to different HTTP status codes (though this logic might be better centralized in `writeJsonErrorResponse` or a dedicated error handling middleware if it becomes complex). The default implementation sends 500 for most errors. Validation errors handled by the `validateSchema` middleware typically result in a 400 Bad Request implicitly via `writeJsonErrorResponse`.

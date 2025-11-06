@@ -1,0 +1,372 @@
+---
+description: Web Core Actions Testing Rules
+globs: **/web/src/core_spec/actions/**/*.ts,**/web/src/core_spec/actions/**/*.tsx
+alwaysApply: false
+---
+
+# Web Core Actions Testing Rules
+
+## Purpose and Testing Philosophy
+
+**Testing Framework**: Use **Vitest** as the testing framework (Jest is deprecated and must be migrated ASAP)
+
+Web Core Actions tests verify the frontend use case implementation that interacts with the API backend. These tests ensure:
+
+1. **API Communication**: Actions correctly communicate with the backend API through ApiClient
+2. **Data Transformation**: Actions properly handle API responses and transform them to domain types
+3. **Parameter Handling**: Actions correctly pass parameters to API endpoints
+4. **Error Handling**: Actions properly handle API errors and let them bubble up to the UI layer
+5. **Type Safety**: Actions maintain type safety throughout the request-response cycle
+
+**CRITICAL**: Web Action tests MUST mock the ApiClient dependency, never make actual HTTP requests.
+
+## File Structure and Naming
+
+### File Naming Convention
+- **Pattern**: `{ActionClassName}.spec.ts`
+- **Location**: Mirror the action's domain folder structure
+- **Examples**:
+  - `GetItems.ts` → `GetItems.spec.ts`
+  - `AddItem.ts` → `AddItem.spec.ts`
+
+### Directory Structure
+```
+core_spec/actions/
+├── item/                  # Item domain actions
+├── user/                  # User domain actions
+├── order/                 # Order domain actions
+└── GetAppDetails.spec.ts  # Root-level actions
+```
+
+## Test Structure and Organization
+
+### Required Test Structure
+All web action tests MUST follow this exact structure:
+
+```typescript
+import ActionType from "@/core/actions/domain/ActionType"
+import type { DomainType } from "@/core/domain/DomainType"
+import type ApiClient from "@/core/infrastructure/ApiClient"
+import { capture, instance, mock, when } from "ts-mockito"
+import { beforeEach, describe, expect, it } from "vitest"
+
+describe("ActionType", () => {
+    let actionInstance: ActionType
+    let mockApiClient: ApiClient
+
+    beforeEach(() => {
+        mockApiClient = mock<ApiClient>()
+        actionInstance = new ActionType(instance(mockApiClient))
+    })
+
+    describe("execute", () => {
+        // Test cases here
+    })
+
+    // Given helpers
+    // When helpers
+    // Then helpers
+})
+```
+
+### Required Test Cases
+Every web action test MUST include these test cases:
+
+1. **Success Path**: Test successful API communication and data return
+2. **Empty Response**: Test handling of empty or no-data responses
+3. **API Error**: Test error handling when API calls fail
+4. **Parameter Passing**: Test that parameters are correctly passed to API
+5. **Type Verification**: Test that returned data has correct type structure
+
+## Mock Setup and Dependencies
+
+### ApiClient Mocking
+1. Actions MUST mock the `ApiClient` using ts-mockito
+2. Mock behavior MUST be set up using `when().thenResolve()` or `when().thenReject()`
+3. Mock verification MUST use `capture()` to verify API calls
+
+```typescript
+// CORRECT
+beforeEach(() => {
+    mockApiClient = mock<ApiClient>()
+    actionInstance = new ActionType(instance(mockApiClient))
+})
+
+// Setup mock behavior
+const given_api_returns_data = (): DomainType[] => {
+    const mockData: DomainType[] = [/* mock data */]
+    when(mockApiClient.post("/endpoint", anything())).thenResolve(mockData as any)
+    return mockData
+}
+
+// INCORRECT - Direct mocking
+beforeEach(() => {
+    mockApiClient = {
+        post: vi.fn(),
+        get: vi.fn(),
+    } as any
+})
+```
+
+### External Dependencies
+1. Actions SHOULD NOT have external dependencies beyond ApiClient
+2. If additional dependencies exist, they MUST be mocked using ts-mockito
+3. All mocks MUST be reset in `beforeEach` hook
+
+## Test Implementation Patterns
+
+### Given-When-Then Structure
+All tests MUST follow the Given-When-Then pattern with helper functions:
+
+```typescript
+it("should fetch data successfully", async () => {
+    // Given
+    const mockData = given_api_returns_data()
+
+    // When
+    const result = await when_executing_action()
+
+    // Then
+    then_data_should_be_returned(result, mockData)
+})
+
+// Given helpers
+const given_api_returns_data = (): DomainType[] => {
+    const mockData: DomainType[] = [/* test data */]
+    when(mockApiClient.post("/endpoint", anything())).thenResolve(mockData as any)
+    return mockData
+}
+
+// When helpers
+const when_executing_action = async (): Promise<DomainType[]> => {
+    return await actionInstance.execute()
+}
+
+// Then helpers
+const then_data_should_be_returned = (result: DomainType[], expected: DomainType[]): void => {
+    expect(result).toEqual(expected)
+}
+```
+
+### Parameter Testing
+Actions with parameters MUST test parameter passing:
+
+```typescript
+it("should pass parameters correctly to API", async () => {
+    // Given
+    const params = { name: "test", category: "electronics" }
+    given_api_accepts_parameters()
+
+    // When
+    await when_executing_action_with_parameters(params)
+
+    // Then
+    then_api_should_be_called_with_parameters(params)
+})
+
+const when_executing_action_with_parameters = async (params: ActionParams): Promise<DomainType> => {
+    return await actionInstance.execute(params)
+}
+
+const then_api_should_be_called_with_parameters = (expectedParams: ActionParams): void => {
+    const [endpoint, capturedParams] = capture(mockApiClient.post).last()
+    expect(endpoint).toBe("/expected_endpoint")
+    expect(capturedParams).toEqual(expectedParams)
+}
+```
+
+### Error Handling Testing
+All actions MUST test error scenarios:
+
+```typescript
+it("should throw error when API call fails", async () => {
+    // Given
+    given_api_call_fails()
+
+    // When/Then
+    await expect(when_executing_action()).rejects.toThrow("API Error")
+})
+
+const given_api_call_fails = (): void => {
+    when(mockApiClient.post("/endpoint", anything())).thenReject(new Error("API Error"))
+}
+```
+
+### Type Safety Testing
+Actions MUST verify return type structure:
+
+```typescript
+it("should return data with correct type structure", async () => {
+    // Given
+    given_api_returns_data()
+
+    // When
+    const result = await when_executing_action()
+
+    // Then
+    then_result_should_have_correct_structure(result)
+})
+
+const then_result_should_have_correct_structure = (result: DomainType[]): void => {
+    expect(Array.isArray(result)).toBe(true)
+    if (result.length > 0) {
+        expect(result[0]).toHaveProperty("id")
+        expect(result[0]).toHaveProperty("name")
+        expect(typeof result[0].id).toBe("string")
+        expect(typeof result[0].name).toBe("string")
+    }
+}
+```
+
+## API Endpoint Testing
+
+### Endpoint Verification
+Tests MUST verify that correct API endpoints are called:
+
+```typescript
+it("should call correct API endpoint", async () => {
+    // Given
+    given_api_returns_empty_data()
+
+    // When
+    await when_executing_action()
+
+    // Then
+    then_correct_endpoint_should_be_called()
+})
+
+const then_correct_endpoint_should_be_called = (): void => {
+    const [capturedEndpoint] = capture(mockApiClient.post).last()
+    expect(capturedEndpoint).toBe("/expected_endpoint")
+}
+```
+
+### HTTP Method Testing
+Tests MUST verify correct HTTP methods are used:
+
+```typescript
+// For GET requests
+const given_api_returns_data = (): DomainType => {
+    const mockData: DomainType = {/* mock data */}
+    when(mockApiClient.get("/endpoint")).thenResolve(mockData as any)
+    return mockData
+}
+
+// For POST requests
+const given_api_accepts_data = (): DomainType => {
+    const mockResponse: DomainType = {/* mock response */}
+    when(mockApiClient.post("/endpoint", anything())).thenResolve(mockResponse as any)
+    return mockResponse
+}
+
+// For PUT requests
+const given_api_updates_data = (): DomainType => {
+    const mockResponse: DomainType = {/* mock response */}
+    when(mockApiClient.put("/endpoint/123", anything())).thenResolve(mockResponse as any)
+    return mockResponse
+}
+```
+
+## Data Handling
+
+### Mock Data Creation
+Mock data MUST match the expected domain type structure:
+
+```typescript
+const createMockItem = (): Item => ({
+    id: "123e4567-e89b-12d3-a456-426614174000",
+    name: "test-item",
+    category: "electronics",
+    description: "A test item for demonstration",
+    price: 99.99,
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z"
+})
+
+const given_api_returns_items = (): Item[] => {
+    const mockItems = [createMockItem()]
+    when(mockApiClient.post("/get_items", anything())).thenResolve(mockItems as any)
+    return mockItems
+}
+```
+
+### Empty Response Testing
+Actions MUST test empty response scenarios:
+
+```typescript
+it("should handle empty response", async () => {
+    // Given
+    given_api_returns_empty_data()
+
+    // When
+    const result = await when_executing_action()
+
+    // Then
+    then_empty_result_should_be_returned(result)
+})
+
+const given_api_returns_empty_data = (): DomainType[] => {
+    when(mockApiClient.post("/endpoint", anything())).thenResolve([] as any)
+    return []
+}
+
+const then_empty_result_should_be_returned = (result: DomainType[]): void => {
+    expect(result).toEqual([])
+    expect(Array.isArray(result)).toBe(true)
+    expect(result.length).toBe(0)
+}
+```
+
+## Import Organization
+
+Tests MUST follow this import order:
+
+```typescript
+// 1. Action being tested
+import ActionType from "@/core/actions/domain/ActionType"
+
+// 2. Domain types
+import type { DomainType } from "@/core/domain/DomainType"
+
+// 3. Infrastructure dependencies
+import type ApiClient from "@/core/infrastructure/ApiClient"
+
+// 4. Testing utilities
+import { capture, instance, mock, when } from "ts-mockito"
+import { beforeEach, describe, expect, it } from "vitest"
+```
+
+## Coverage Requirements
+
+### Minimum Test Coverage
+1. **Basic Execution**: Test successful execution path
+2. **Error Scenarios**: Test API failure scenarios
+3. **Parameter Handling**: Test parameter passing (if applicable)
+4. **Empty Responses**: Test empty or null response handling
+5. **Type Verification**: Test return type structure
+6. **API Communication**: Test correct endpoint and method usage
+
+### Code Coverage Targets
+- **Minimum Coverage**: 90% code coverage for action files
+- **Branch Coverage**: Cover all conditional logic paths
+- **Error Paths**: Cover all error handling scenarios
+
+## Review Checklist
+
+- [ ] Test file follows naming convention (`*.spec.ts`)
+- [ ] Uses Vitest testing framework
+- [ ] Uses ts-mockito for mocking ApiClient
+- [ ] Follows Given-When-Then pattern with helper functions
+- [ ] Tests successful execution path
+- [ ] Tests error handling scenarios
+- [ ] Tests parameter passing (if applicable)
+- [ ] Tests empty response handling
+- [ ] Verifies correct API endpoint calls
+- [ ] Verifies correct HTTP method usage
+- [ ] Tests return type structure
+- [ ] Includes proper mock setup in beforeEach
+- [ ] Uses descriptive test names
+- [ ] Achieves adequate code coverage
+- [ ] Mock data matches domain type structure
+- [ ] Uses capture() for API call verification
+- [ ] Follows import organization standards

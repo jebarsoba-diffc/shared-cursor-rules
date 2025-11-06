@@ -1,0 +1,214 @@
+---
+description: Postgres Infrastructure Implementation Rules
+globs: **/core/infrastructure/postgres/**/*.ts,**/core/infrastructure/postgres/**/*.tsx
+alwaysApply: false
+---
+
+# Postgres Infrastructure Implementation Rules
+
+## Purpose and Structure
+
+Postgres infrastructure implementations are responsible for all direct interactions with PostgreSQL databases. These implementations should:
+
+1. **Implement a domain interface** to ensure dependency inversion and maintain a clear separation of concerns.
+2. **Use constructor injection** for dependencies such as database clients (e.g., `PostgresClient`).
+3. **Encapsulate all SQL logic** to abstract database details from the domain layer.
+4. **Map domain objects** to and from database representations, handling serialization and deserialization.
+5. **Use parameterized queries** to prevent SQL injection vulnerabilities.
+6. **Handle errors explicitly** with meaningful logging and exception handling.
+7. **Ensure immutability of dependencies** by marking them as `readonly`.
+8. **Avoid embedding business logic** within repository or data access classes; business logic should reside in domain services.
+9. **Optimize performance** by implementing batching, indexing, and efficient query strategies where applicable.
+10. **Follow domain-driven naming conventions** to keep implementation details aligned with domain concepts.
+
+## Example: Postgres Repository Implementation
+
+```typescript
+import User from "@/core/domain/users/User"
+import Users from "@/core/domain/users/Users"
+import type PostgresClient from "@/core/infrastructure/postgres/PostgresClient"
+
+export default class PostgresUsers implements Users {
+    private readonly tableName = "users"
+
+    constructor(private readonly postgresClient: PostgresClient) {}
+
+    async add(user: User): Promise<void> {
+        const data = {
+            id: user.Id,
+            name: user.Name,
+            email: user.Email,
+            created_at: user.CreatedAt,
+        }
+        await this.postgresClient.insert(this.tableName, data)
+    }
+
+    async findById(id: string): Promise<User | null> {
+        const result = await this.postgresClient.query(
+            `SELECT * FROM ${this.tableName} WHERE id = $1`,
+            [id]
+        )
+        if (!result.rows.length) return null
+        return this.mapToDomain(result.rows[0])
+    }
+
+    private mapToDomain(row: Record<string, any>): User {
+        return User.create({
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            createdAt: row.created_at,
+        })
+    }
+}
+```
+
+## Additional Best Practices
+
+- **Encapsulate dependencies** to prevent database libraries from leaking into the domain layer.
+- **Use environment variables** for database credentials and sensitive configurations.
+- **Implement connection pooling and retries** to handle transient database failures.
+- **Ensure proper logging and monitoring** to track failures and performance issues.
+- **Keep infrastructure code as stateless as possible** to improve scalability.
+
+## CORRECT / FORBIDDEN Examples
+
+### CORRECT: Implement a domain interface and use dependency injection
+```typescript
+// ✅ CORRECT: Implements domain interface and injects PostgresClient
+export default class PostgresUsers implements Users {
+    constructor(private readonly postgresClient: PostgresClient) {}
+    // ...
+}
+```
+
+### FORBIDDEN: No interface or direct usage of database client
+```typescript
+// ❌ FORBIDDEN: No interface, direct DB usage
+export class UsersRepo {
+    client = new PostgresClient()
+    // ...
+}
+```
+
+### CORRECT: Use parameterized queries
+```typescript
+// ✅ CORRECT: Parameterized query prevents SQL injection
+await this.postgresClient.query(
+    'SELECT * FROM users WHERE id = $1',
+    [userId]
+)
+```
+
+### CORRECT: Building PostgreSQL placeholders dynamically
+```typescript
+// ✅ CORRECT: Dynamically building placeholders for SQL queries
+// Example 1: IN clause with multiple values
+const placeholders = ids.map((_, index) => `$${index + 1}`).join(", ")
+const condition = `id IN (${placeholders})`
+await this.postgresClient.delete(table, condition, ids)
+
+// Example 2: Dynamic WHERE conditions
+const conditions = filters.map((_, i) => `column${i + 1} = $${i + 1}`).join(" AND ")
+const query = `SELECT * FROM table WHERE ${conditions}`
+await this.postgresClient.query(query, filterValues)
+
+// Example 3: Bulk insert with multiple rows
+const valueRows = rows.map((_, rowIndex) => {
+    const startIndex = rowIndex * 3
+    return `($${startIndex + 1}, $${startIndex + 2}, $${startIndex + 3})`
+}).join(", ")
+const query = `INSERT INTO table (col1, col2, col3) VALUES ${valueRows}`
+await this.postgresClient.query(query, flattenedValues)
+
+// These are SAFE because:
+// - String interpolation is used ONLY to build placeholder positions ($1, $2, etc.)
+// - Actual user values are NEVER interpolated into the query string
+// - Values are always passed separately via the params array
+```
+
+### FORBIDDEN: String interpolation of user values in SQL queries
+```typescript
+// ❌ FORBIDDEN: Vulnerable to SQL injection - interpolating actual values
+await this.postgresClient.query(
+    `SELECT * FROM users WHERE id = '${userId}'`
+)
+
+// ❌ FORBIDDEN: Building query with actual values instead of placeholders
+const idList = ids.map(id => `'${id}'`).join(", ")
+const query = `SELECT * FROM users WHERE id IN (${idList})`
+await this.postgresClient.query(query)
+```
+
+### CORRECT: Map database rows to domain objects
+```typescript
+// ✅ CORRECT: Maps DB row to domain entity
+private mapToDomain(row: Record<string, any>): User {
+    return User.create({
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        createdAt: row.created_at,
+    })
+}
+```
+
+### FORBIDDEN: Return raw database rows to domain layer
+```typescript
+// ❌ FORBIDDEN: Leaks DB structure to domain
+return result.rows[0] // instead of mapping to domain object
+```
+
+### CORRECT: Handle errors with logging and clear exceptions
+```typescript
+// ✅ CORRECT: Explicit error handling
+try {
+    await this.postgresClient.insert(...)
+} catch (error) {
+    console.error('Postgres insert failed', error)
+    throw new Error('Failed to save user')
+}
+```
+
+### FORBIDDEN: Silent error swallowing or leaking raw errors
+```typescript
+// ❌ FORBIDDEN: No error handling or leaking DB errors
+await this.postgresClient.insert(...)
+// or
+catch (error) {
+    throw error // leaks DB error details
+}
+```
+
+### CORRECT: Mark dependencies as readonly
+```typescript
+// ✅ CORRECT: Dependency is readonly
+constructor(private readonly postgresClient: PostgresClient) {}
+```
+
+### FORBIDDEN: Mutable dependencies
+```typescript
+// ❌ FORBIDDEN: Dependency is mutable
+constructor(private postgresClient: PostgresClient) {}
+```
+
+### CORRECT: No business logic in infrastructure
+```typescript
+// ✅ CORRECT: Only data access, no business rules
+async add(user: User) {
+    // ...
+}
+```
+
+### FORBIDDEN: Business logic in repository
+```typescript
+// ❌ FORBIDDEN: Business rules in infrastructure
+async add(user: User) {
+    if (user.email.endsWith('@banned.com')) {
+        throw new Error('Banned domain')
+    }
+    // ...
+}
+```
+
+These rules ensure that Postgres infrastructure implementations remain **modular, secure, and maintainable** while following **Hexagonal Architecture** principles.

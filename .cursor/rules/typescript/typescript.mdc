@@ -1,0 +1,79 @@
+---
+description: TypeScript Code Rules
+globs: **/*.ts
+alwaysApply: false
+---
+
+# TypeScript Code Rules
+
+## ⚠️ CRITICAL: Trust TypeScript's Type System
+
+**DO NOT suggest runtime type guards or method existence checks for statically typed dependencies.**
+
+TypeScript's compiler already validates:
+- Interface method existence at compile time
+- Type compatibility between declarations and usage
+- Optional property access patterns
+- Generic type constraints
+
+**NEVER flag these as issues:**
+- ❌ "Verify that interface method exists before calling" - TypeScript already does this
+- ❌ "Add type guard to check if method is available" - Not needed for typed interfaces
+- ❌ "Validate that dependency has this method" - Compile-time guarantee
+- ❌ "Check if optional dependency supports this method" - TypeScript's type system handles this
+
+**Example of CORRECT code that should NOT be flagged:**
+```typescript
+interface Logger {
+    getLogs(lastLines: number): Promise<string[]>
+    getErrorLogs(lastLines: number): Promise<string[]>
+}
+
+class GetLogs {
+    constructor(
+        private readonly logger: Logger,
+        private readonly authLogger?: Logger,
+    ) {}
+
+    async execute(lastLines: number): Promise<string[]> {
+        // ✅ CORRECT - TypeScript guarantees these methods exist
+        if (this.authLogger) {
+            return this.authLogger.getLogs(lastLines)  // No type guard needed
+        }
+        return this.logger.getErrorLogs(lastLines)  // No type guard needed
+    }
+}
+```
+
+**Focus your review on:**
+- ✅ Business logic errors
+- ✅ Architectural pattern violations
+- ✅ Security vulnerabilities
+- ✅ Performance issues
+- ✅ Code maintainability and readability
+
+**DO NOT review:**
+- ❌ Type safety (TypeScript compiler's job)
+- ❌ Interface contract validation (compile-time checks)
+- ❌ Method existence on typed interfaces
+
+## Review Criteria
+
+1. Type safety should be maintained - avoid using `any` type where possible
+2. Use proper interfaces and types for complex objects
+3. Follow consistent naming conventions:
+   - **Variables and function names:** camelCase (e.g., `userName`, `calculateTotal`)
+   - **Classes and interfaces:** PascalCase (e.g., `User`, `PaymentService`)
+   - **Domain class public getters:** PascalCase (e.g., `user.Name`, `order.TotalAmount`, not `user.name` or `order.totalAmount`)
+   - **Exception:** Functions inside test files (e.g., `*.test.ts`, `*.spec.ts`) are allowed to use `snake_case` naming, such as `given_something`, `when_something`, `then_something`, to improve test readability and structure.
+4. Use async/await rather than raw Promises where appropriate
+5. Properly handle null and undefined values
+
+## Good Practices
+
+- Use TypeScript's strictness features
+- Add comments for complex logic
+- Keep functions small and focused
+- Use destructuring for cleaner code
+- Leverage TypeScript's type system for better code quality
+- For domain classes in `/src/core/domain/`, always expose properties via PascalCase getters (e.g., `get Name()` not `get name()`)

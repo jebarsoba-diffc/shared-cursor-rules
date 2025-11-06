@@ -1,0 +1,991 @@
+---
+description: HTTP Operations Test Rules
+globs: **/http_test/**/*.ts,**/http_test/**/*.tsx
+alwaysApply: false
+---
+
+# HTTP Operations Test Rules
+
+## Purpose and Testing Philosophy
+
+**Testing Framework**: Use **Vitest** as the testing framework (Jest is deprecated and must be migrated ASAP)
+
+HTTP Operation tests MUST test through the full HTTP layer using integration testing. These tests verify:
+
+1. **HTTP Endpoint Behavior**: Request/response handling, status codes, and JSON formatting
+2. **Schema Validation**: Request body validation and error responses
+3. **Authentication**: Access control for protected endpoints
+4. **Action Integration**: Proper action invocation and response handling
+5. **Error Handling**: Comprehensive error scenario coverage
+
+**CRITICAL**: Operation tests MUST NOT test operation handlers directly. Always test through HTTP requests using `supertest`.
+
+## File Structure and Naming
+
+### File Naming Convention
+- **Pattern**: `{OperationClassName}.test.ts`
+- **Location**: Mirror the operation's domain folder structure
+- **Examples**:
+  - `AddCodebaseOperation.ts` → `AddCodebaseOperation.test.ts`
+  - `EvaluateCommitByIdOperation.ts` → `EvaluateCommitByIdOperation.test.ts`
+
+### Directory Structure
+```
+http_test/operations/
+├── auth/                    # Authentication operations
+├── codebase/               # Codebase domain operations
+├── commit/                 # Commit domain operations
+├── code_review/            # Code review operations
+└── public/                 # Public (non-authenticated) operations
+```
+
+## Test Structure and Organization
+
+### Required Test Structure
+All operation tests MUST follow this exact structure:
+
+```typescript
+import ActionType from "@/core/actions/domain/ActionName"
+import DomainEntity from "@/core/domain/entity/EntityName"
+import Provider, { ProviderType } from "@/core/provider"
+import { createServer } from "@/http/server"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { agent as request } from "supertest"
+import { deepEqual, instance, mock, when } from "ts-mockito"
+
+describe("{HTTP_METHOD} {endpoint_path}", () => {
+    let server: any
+    let provider: ProviderType
+    let mockAction: ActionType
+
+    beforeEach(async () => {
+        // Setup provider and mocks
+        provider = { ...Provider }
+        
+        mockAction = mock(ActionType)
+        provider.actionName = instance(mockAction)
+        
+        server = await createServer(provider)
+    })
+
+    afterEach(async () => {
+        if (server && server.close) {
+            await new Promise<void>((resolve) => {
+                server.close(() => resolve())
+            })
+        }
+    })
+
+    // Test cases using Given-When-Then pattern
+    describe("success scenarios", () => {
+        it("should handle successful operation", async () => {
+            // Given
+            const requestData = given_valid_request_data()
+            const expectedResult = given_action_succeeds()
+
+            // When
+            const response = await when_calling_endpoint(requestData)
+
+            // Then
+            then_response_should_be_successful(response)
+            then_response_should_contain_expected_data(response, expectedResult)
+        })
+    })
+
+    describe("validation errors", () => {
+        it("should return 400 for invalid request body", async () => {
+            // Given
+            const invalidData = given_invalid_request_data()
+
+            // When
+            const response = await when_calling_endpoint(invalidData)
+
+            // Then
+            then_response_should_be_bad_request(response)
+        })
+    })
+
+    describe("action errors", () => {
+        it("should return 500 when action throws error", async () => {
+            // Given
+            const requestData = given_valid_request_data()
+            given_action_throws_error()
+
+            // When
+            const response = await when_calling_endpoint(requestData)
+
+            // Then
+            then_response_should_be_server_error(response)
+        })
+    })
+
+    // Helper methods following Given-When-Then pattern
+    // ... helper implementations
+})
+```
+
+## Mock Management
+
+### CRITICAL RULE: Always Mock Actions (When Used)
+**Actions MUST ALWAYS be mocked in operation tests when the operation calls an action.** Never use real action implementations.
+
+**EXCEPTION**: If an operation does NOT call any action (e.g., it only reads from middleware-populated data like `response.locals.authUser`), then no action mocking is required. In such cases, the operation directly uses provider data without action layer involvement.
+
+```typescript
+// ✅ CORRECT: Mock the action when operation uses it
+let mockAction: ActionType
+
+beforeEach(async () => {
+    provider = { ...Provider }
+
+    mockAction = mock(ActionType)
+    provider.actionName = instance(mockAction)
+
+    server = await createServer(provider)
+})
+
+// ✅ CORRECT: No action mocking needed if operation doesn't call actions
+beforeEach(async () => {
+    provider = { ...Provider }
+    // No action mocking needed - operation only reads middleware data
+    server = await createServer(provider)
+})
+
+// ❌ FORBIDDEN: Using real actions when operation calls them
+beforeEach(async () => {
+    provider = { ...Provider }
+    // Don't use real provider.actionName when operation calls it
+    server = await createServer(provider)
+})
+```
+
+### What to Mock vs What Not to Mock
+- **MUST Mock**: All actions used by the operation, external services, databases
+- **EXCEPTION**: If operation doesn't call any actions (only reads middleware data), no action mocking needed
+- **DON'T Mock**: HTTP framework, JSON response helpers, domain entities
+- **Provider Setup**: Always start with `{ ...Provider }` and replace specific actions (when operation uses them)
+
+## Given-When-Then Pattern
+
+### Required Helper Method Structure
+All tests MUST use Given-When-Then helper methods with maximum fixture usage:
+
+```typescript
+// Given helpers - Setup test preconditions using fixtures
+const given_valid_request_data = () => aValidRequestData()
+
+const given_minimal_request_data = () => aMinimalRequestData()
+
+const given_invalid_request_data = () => aInvalidRequestData()
+
+const given_action_succeeds = () => {
+    const mockResult = aDomainEntity({
+        id: TEST_CONSTANTS.VALID_ID,
+        field1: TEST_CONSTANTS.VALID_FIELD1
+    })
+    
+    when(mockAction.execute(deepEqual(expectedParams)))
+        .thenResolve(mockResult)
+    
+    return mockResult
+}
+
+const given_action_throws_domain_error = () => {
+    when(mockAction.execute(anything()))
+        .thenReject(ENTITY_NOT_FOUND)
+}
+
+const given_action_throws_validation_error = () => {
+    when(mockAction.execute(anything()))
+        .thenReject(new ValidationError("Invalid input"))
+}
+
+// When helpers - Execute the action being tested using fixtures
+const when_calling_endpoint = async (requestData: any) => {
+    return await request(server)
+        .post("/endpoint_path")
+        .send(requestData)
+}
+
+const when_calling_authenticated_endpoint = async (requestData: any) => {
+    return await request(server)
+        .post("/endpoint_path")
+        .set('Authorization', aValidAuthToken())
+        .send(requestData)
+}
+
+const when_calling_endpoint_with_invalid_auth = async (requestData: any) => {
+    return await request(server)
+        .post("/endpoint_path")
+        .set('Authorization', anInvalidAuthToken())
+        .send(requestData)
+}
+
+// Then helpers - Verify expected outcomes using fixture-based expectations
+const then_response_should_be_successful = (response: any) => {
+    expect(response.status).toBe(200)
+    expect(response.type).toBe("application/json")
+}
+
+const then_response_should_match_expected_structure = (response: any, expectedEntity: DomainEntity) => {
+    const expectedResponse = anExpectedSuccessResponse(expectedEntity)
+    expect(response.body).toEqual(expectedResponse)
+}
+
+const then_response_should_have_validation_error = (response: any, fieldName: string) => {
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject(anExpectedValidationErrorResponse(fieldName))
+}
+
+const then_response_should_have_domain_error = (response: any, errorCode: string) => {
+    expect(response.status).toBe(500)
+    expect(response.body).toMatchObject(anExpectedDomainErrorResponse(errorCode))
+}
+
+const then_response_should_be_unauthorized = (response: any) => {
+    expect(response.status).toBe(401)
+    expect(response.body).toMatchObject(anExpectedAuthErrorResponse())
+}
+
+// Fixture functions for test data
+const aValidRequestData = () => ({
+    field1: TEST_CONSTANTS.VALID_FIELD1,
+    field2: TEST_CONSTANTS.VALID_FIELD2,
+    emailField: TEST_CONSTANTS.VALID_EMAIL
+})
+
+const aMinimalRequestData = () => ({
+    field1: TEST_CONSTANTS.VALID_FIELD1,
+    field2: TEST_CONSTANTS.VALID_FIELD2
+})
+
+const aInvalidRequestData = () => ({
+    field1: TEST_CONSTANTS.EMPTY_STRING
+    // Missing required field2
+})
+
+// Response expectation fixtures
+const anExpectedSuccessResponse = (entity: DomainEntity) => ({
+    id: entity.Id,
+    field1: entity.Field1,
+    field2: entity.Field2,
+    createdAt: entity.CreatedAt.toISOString()
+})
+
+const anExpectedValidationErrorResponse = (fieldName: string) => ({
+    error: `${fieldName} is required`,
+    code: "VALIDATION_ERROR",
+    timestamp: expect.any(String)
+})
+
+const anExpectedDomainErrorResponse = (errorCode: string) => ({
+    error: errorCode,
+    timestamp: expect.any(String)
+})
+
+const anExpectedAuthErrorResponse = () => ({
+    error: "Unauthorized",
+    code: "AUTH_ERROR"
+})
+```
+
+## 100% Coverage Requirements
+
+### Mandatory Test Scenarios
+Every operation test MUST include these test scenarios:
+
+#### 1. Success Scenarios
+- **Primary Success Path**: Valid request with expected response
+- **Edge Cases**: Boundary conditions, optional parameters, empty results
+- **Multiple Success Variations**: Different valid input combinations
+
+#### 2. Validation Error Scenarios
+- **Missing Required Fields**: Test each required field individually
+- **Invalid Field Values**: Invalid formats, types, ranges
+- **Invalid Field Combinations**: Conflicting or incompatible field values
+
+#### 3. Action Error Scenarios
+- **Generic Action Errors**: When action throws unexpected errors
+- **Domain-Specific Errors**: When action throws domain errors (all return 500 per domain error standards)
+- **Multiple Error Types**: Different error conditions the action might throw
+
+#### 4. Authentication Scenarios (Non-Public Operations)
+- **Valid Authentication**: Successful requests with proper auth
+- **Missing Authentication**: Requests without auth headers
+- **Invalid Authentication**: Requests with invalid/expired tokens
+
+### Coverage Examples
+
+```typescript
+describe("POST /endpoint_path", () => {
+    // ... setup ...
+
+    describe("success scenarios", () => {
+        it("should successfully process request with all fields", async () => {
+            // Test complete request
+        })
+
+        it("should work without optional fields", async () => {
+            // Test optional field handling
+        })
+
+        it("should handle different enum values", async () => {
+            // Test enum/choice variations
+        })
+    })
+
+    describe("validation errors", () => {
+        it("should return 400 for missing required field", async () => {
+            // Test each required field
+        })
+
+        it("should return 400 for invalid field format", async () => {
+            // Test format validation
+        })
+
+        it("should return 400 for invalid enum value", async () => {
+            // Test enum validation
+        })
+
+        it("should return 400 for empty request body", async () => {
+            // Test complete missing body
+        })
+    })
+
+    describe("action errors", () => {
+        it("should return 500 when action throws generic error", async () => {
+            // Test unexpected errors
+        })
+
+        it("should return 500 when action throws domain error", async () => {
+            // Test domain-specific errors
+        })
+
+        it("should return 500 when action throws validation error", async () => {
+            // Test other domain errors
+        })
+    })
+
+    describe("authentication", () => {
+        it("should return 401 for missing authentication", async () => {
+            // Test missing auth (if not public)
+        })
+
+        it("should return 401 for invalid token", async () => {
+            // Test invalid auth (if not public)
+        })
+    })
+})
+```
+
+## Authentication Testing
+
+### Public Operations
+Operations in `/operations/public/` are accessible without authentication:
+
+```typescript
+// No authentication setup needed
+const when_calling_public_endpoint = async (requestData: any) => {
+    return await request(server)
+        .post("/public_endpoint")
+        .send(requestData)
+}
+```
+
+### Protected Operations
+All operations outside `/operations/public/` MUST be tested with authentication:
+
+```typescript
+// Test authenticated access
+const when_calling_authenticated_endpoint = async (requestData: any) => {
+    return await request(server)
+        .post("/protected_endpoint")
+        .set('Authorization', 'Bearer valid-token')
+        .send(requestData)
+}
+
+// Test missing authentication
+const when_calling_endpoint_without_auth = async (requestData: any) => {
+    return await request(server)
+        .post("/protected_endpoint")
+        .send(requestData)
+}
+
+// Required authentication tests
+it("should return 401 for missing authentication", async () => {
+    const requestData = given_valid_request_data()
+    const response = await when_calling_endpoint_without_auth(requestData)
+    expect(response.status).toBe(401)
+})
+```
+
+## Error Handling Testing
+
+### Error Response Verification
+All error scenarios MUST verify proper error response format:
+
+```typescript
+const then_response_should_be_bad_request = (response: any) => {
+    expect(response.status).toBe(400)
+    expect(response.type).toBe("application/json")
+    expect(response.body.error).toBeDefined()
+}
+
+const then_response_should_be_server_error = (response: any) => {
+    expect(response.status).toBe(500)
+    expect(response.type).toBe("application/json")
+    expect(response.body.error).toBeDefined()
+}
+
+const then_response_should_be_unauthorized = (response: any) => {
+    expect(response.status).toBe(401)
+    expect(response.type).toBe("application/json")
+}
+```
+
+## Test Data Management and Fixtures
+
+### CRITICAL RULE: Maximize Fixture Usage
+**ALWAYS use fixtures for test data creation to improve readability, maintainability, and reusability.**
+
+### Domain Entity Fixtures
+Leverage existing domain fixtures for consistent test data:
+
+```typescript
+import { aDomainEntity, aDomainEntityWithCustomField } from "@/core_test/fixtures/DomainEntityFixtures"
+
+// ✅ CORRECT: Use fixtures with overrides for specific test cases
+const given_action_returns_entity = () => {
+    const mockEntity = aDomainEntity({
+        id: "test-specific-id",
+        field1: "custom-value"
+    })
+    
+    when(mockAction.execute(anything()))
+        .thenResolve(mockEntity)
+    
+    return mockEntity
+}
+
+// ✅ CORRECT: Use specialized fixtures for different scenarios
+const given_action_returns_entity_with_special_case = () => {
+    const mockEntity = aDomainEntityWithCustomField()
+    
+    when(mockAction.execute(anything()))
+        .thenResolve(mockEntity)
+    
+    return mockEntity
+}
+
+// ❌ AVOID: Manual object creation
+const given_action_returns_entity_manual = () => {
+    const mockEntity = DomainEntity.create({
+        id: "test-id-123",
+        field1: "test-value",
+        field2: "another-value",
+        createdAt: new Date(),
+        updatedAt: new Date()
+    })
+    // ... lots of manual setup
+}
+```
+
+### Request Data Fixtures
+Create comprehensive request data fixtures for all scenarios:
+
+```typescript
+// ✅ CORRECT: Comprehensive fixture-based request builders
+const given_valid_request = (overrides = {}) => ({
+    ...aValidRequestData(),
+    ...overrides
+})
+
+const given_minimal_valid_request = () => aMinimalRequestData()
+
+const given_request_with_all_optional_fields = () => aCompleteRequestData()
+
+const given_invalid_request_missing_required_field = () => ({
+    ...aValidRequestData(),
+    field1: undefined // Remove required field
+})
+
+const given_invalid_request_with_bad_format = () => ({
+    ...aValidRequestData(),
+    emailField: "not-an-email"
+})
+
+// Define reusable fixture functions
+const aValidRequestData = () => ({
+    field1: "valid-value",
+    field2: "another-value",
+    emailField: "test@example.com",
+    enumField: "VALID_ENUM_VALUE"
+})
+
+const aMinimalRequestData = () => ({
+    field1: "valid-value",
+    field2: "another-value"
+})
+
+const aCompleteRequestData = () => ({
+    ...aValidRequestData(),
+    optionalField1: "optional-value",
+    optionalField2: 123,
+    optionalArrayField: ["item1", "item2"]
+})
+```
+
+### Error Scenario Fixtures
+Create fixtures for different error scenarios:
+
+```typescript
+// ✅ CORRECT: Error scenario fixtures
+const given_action_throws_domain_error = () => {
+    when(mockAction.execute(anything()))
+        .thenReject(DOMAIN_ERROR_CONSTANT)
+}
+
+const given_action_throws_validation_error = () => {
+    when(mockAction.execute(anything()))
+        .thenReject(new ValidationError("Invalid input"))
+}
+
+const given_action_throws_generic_error = () => {
+    when(mockAction.execute(anything()))
+        .thenReject(new Error("Unexpected error"))
+}
+
+// Use error constants from domain
+import { ENTITY_NOT_FOUND, ENTITY_ALREADY_EXISTS } from "@/core/domain/entity/Errors"
+
+const given_action_throws_not_found_error = () => {
+    when(mockAction.execute(anything()))
+        .thenReject(ENTITY_NOT_FOUND)
+}
+```
+
+### Authentication Fixtures
+Create reusable authentication fixtures:
+
+```typescript
+// ✅ CORRECT: Authentication fixtures
+const aValidAuthToken = () => "Bearer valid-test-token"
+const anInvalidAuthToken = () => "Bearer invalid-token"
+const anExpiredAuthToken = () => "Bearer expired-token"
+
+const given_valid_authentication = () => {
+    // Setup auth middleware to accept valid tokens
+}
+
+const given_invalid_authentication = () => {
+    // Setup auth middleware to reject tokens
+}
+
+// Use in When helpers
+const when_calling_authenticated_endpoint = async (requestData: any) => {
+    return await request(server)
+        .post("/endpoint_path")
+        .set('Authorization', aValidAuthToken())
+        .send(requestData)
+}
+
+const when_calling_endpoint_with_invalid_auth = async (requestData: any) => {
+    return await request(server)
+        .post("/endpoint_path")
+        .set('Authorization', anInvalidAuthToken())
+        .send(requestData)
+}
+```
+
+### Response Expectation Fixtures
+Create fixtures for expected response structures:
+
+```typescript
+// ✅ CORRECT: Response expectation fixtures
+const anExpectedSuccessResponse = (entity: DomainEntity) => ({
+    id: entity.Id,
+    field1: entity.Field1,
+    field2: entity.Field2,
+    createdAt: entity.CreatedAt.toISOString()
+})
+
+const anExpectedErrorResponse = (errorMessage: string) => ({
+    error: errorMessage,
+    timestamp: expect.any(String),
+    path: expect.any(String)
+})
+
+// Use in Then helpers
+const then_response_should_match_expected_structure = (response: any, expectedEntity: DomainEntity) => {
+    const expectedResponse = anExpectedSuccessResponse(expectedEntity)
+    expect(response.body).toEqual(expectedResponse)
+}
+
+const then_response_should_have_error_structure = (response: any, errorMessage: string) => {
+    const expectedError = anExpectedErrorResponse(errorMessage)
+    expect(response.body).toMatchObject(expectedError)
+}
+```
+
+### Fixture Organization Patterns
+
+#### Test Constants File
+Create a constants file for each operation test:
+
+```typescript
+// TestConstants.ts or within the test file
+export const TEST_CONSTANTS = {
+    VALID_ID: "test-id-123",
+    VALID_FIELD1: "valid-value",
+    VALID_EMAIL: "test@example.com",
+    INVALID_EMAIL: "not-an-email",
+    LONG_STRING: "a".repeat(1000),
+    EMPTY_STRING: "",
+    NULL_VALUE: null,
+    UNDEFINED_VALUE: undefined
+} as const
+
+// Use in fixtures
+const aValidRequestData = () => ({
+    id: TEST_CONSTANTS.VALID_ID,
+    field1: TEST_CONSTANTS.VALID_FIELD1,
+    email: TEST_CONSTANTS.VALID_EMAIL
+})
+```
+
+#### Scenario-Based Fixture Groups
+Group fixtures by test scenarios:
+
+```typescript
+// Success scenario fixtures
+const SUCCESS_FIXTURES = {
+    validRequest: () => aValidRequestData(),
+    minimalRequest: () => aMinimalRequestData(),
+    completeRequest: () => aCompleteRequestData(),
+    successfulEntity: () => aDomainEntity()
+} as const
+
+// Validation error fixtures
+const VALIDATION_ERROR_FIXTURES = {
+    missingRequiredField: () => ({ ...aValidRequestData(), field1: undefined }),
+    invalidEmail: () => ({ ...aValidRequestData(), email: TEST_CONSTANTS.INVALID_EMAIL }),
+    tooLongString: () => ({ ...aValidRequestData(), field1: TEST_CONSTANTS.LONG_STRING }),
+    emptyRequest: () => ({})
+} as const
+
+// Error scenario fixtures
+const ERROR_FIXTURES = {
+    domainError: () => ENTITY_NOT_FOUND,
+    validationError: () => new ValidationError("Invalid input"),
+    genericError: () => new Error("Unexpected error")
+} as const
+```
+
+### Complete Fixture Usage Example
+
+```typescript
+describe("POST /endpoint_path", () => {
+    // ... setup ...
+
+    describe("success scenarios", () => {
+        it("should successfully process request with all fields", async () => {
+            // Given
+            const requestData = SUCCESS_FIXTURES.completeRequest()
+            const expectedEntity = SUCCESS_FIXTURES.successfulEntity()
+            given_action_returns_entity(expectedEntity)
+
+            // When
+            const response = await when_calling_endpoint(requestData)
+
+            // Then
+            then_response_should_be_successful(response)
+            then_response_should_match_expected_structure(response, expectedEntity)
+        })
+
+        it("should work with minimal request", async () => {
+            // Given
+            const requestData = SUCCESS_FIXTURES.minimalRequest()
+            const expectedEntity = SUCCESS_FIXTURES.successfulEntity()
+            given_action_returns_entity(expectedEntity)
+
+            // When
+            const response = await when_calling_endpoint(requestData)
+
+            // Then
+            then_response_should_be_successful(response)
+            then_response_should_match_expected_structure(response, expectedEntity)
+        })
+    })
+
+    describe("validation errors", () => {
+        it("should return 400 for missing required field", async () => {
+            // Given
+            const invalidData = VALIDATION_ERROR_FIXTURES.missingRequiredField()
+
+            // When
+            const response = await when_calling_endpoint(invalidData)
+
+            // Then
+            then_response_should_be_bad_request(response)
+            then_response_should_have_error_structure(response, "Field1 is required")
+        })
+
+        it("should return 400 for invalid email format", async () => {
+            // Given
+            const invalidData = VALIDATION_ERROR_FIXTURES.invalidEmail()
+
+            // When
+            const response = await when_calling_endpoint(invalidData)
+
+            // Then
+            then_response_should_be_bad_request(response)
+            then_response_should_have_error_structure(response, "Invalid email format")
+        })
+    })
+
+    describe("action errors", () => {
+        it("should return 500 when action throws domain error", async () => {
+            // Given
+            const requestData = SUCCESS_FIXTURES.validRequest()
+            given_action_throws_domain_error()
+
+            // When
+            const response = await when_calling_endpoint(requestData)
+
+            // Then
+            then_response_should_be_server_error(response)
+            then_response_should_have_error_structure(response, "ENTITY_NOT_FOUND")
+        })
+    })
+
+    // Helper methods using fixtures
+    const given_action_returns_entity = (entity: DomainEntity) => {
+        when(mockAction.execute(anything()))
+            .thenResolve(entity)
+    }
+
+    const given_action_throws_domain_error = () => {
+        when(mockAction.execute(anything()))
+            .thenReject(ERROR_FIXTURES.domainError())
+    }
+
+    const when_calling_endpoint = async (requestData: any) => {
+        return await request(server)
+            .post("/endpoint_path")
+            .send(requestData)
+    }
+
+    const then_response_should_match_expected_structure = (response: any, expectedEntity: DomainEntity) => {
+        const expectedResponse = anExpectedSuccessResponse(expectedEntity)
+        expect(response.body).toEqual(expectedResponse)
+    }
+})
+```
+
+### Benefits of Comprehensive Fixture Usage
+
+1. **Readability**: Test intentions are clearer with descriptive fixture names
+2. **Maintainability**: Changes to data structures only require fixture updates
+3. **Reusability**: Fixtures can be shared across multiple test cases
+4. **Consistency**: Standardized test data across all tests
+5. **Reduced Duplication**: Common patterns defined once and reused
+6. **Better Test Names**: Fixture names make test scenarios self-documenting
+
+## Fixture Naming Conventions
+
+### Standard Fixture Naming Patterns
+Follow these naming conventions for consistent fixture usage:
+
+```typescript
+// ✅ CORRECT: Fixture naming patterns
+const aDomainEntity = () => { /* ... */ }           // Single entity
+const someDomainEntities = () => { /* ... */ }      // Multiple entities
+const aValidRequestData = () => { /* ... */ }       // Valid request
+const anInvalidRequestData = () => { /* ... */ }    // Invalid request
+const aCompleteRequestData = () => { /* ... */ }    // Complete request
+const aMinimalRequestData = () => { /* ... */ }     // Minimal request
+const anExpectedResponse = () => { /* ... */ }      // Expected response
+const aValidAuthToken = () => { /* ... */ }         // Authentication token
+const anErrorResponse = () => { /* ... */ }         // Error response
+
+// ✅ CORRECT: Scenario-specific fixtures
+const aRequestWithMissingField = () => { /* ... */ }
+const aRequestWithInvalidEmail = () => { /* ... */ }
+const aRequestWithTooLongString = () => { /* ... */ }
+const anEntityWithSpecialCase = () => { /* ... */ }
+const anExpectedValidationError = () => { /* ... */ }
+```
+
+### Fixture Constants Organization
+```typescript
+// ✅ CORRECT: Organized test constants
+const TEST_CONSTANTS = {
+    // IDs
+    VALID_ID: "test-id-123",
+    INVALID_ID: "invalid-id",
+    
+    // Strings
+    VALID_STRING: "valid-value",
+    EMPTY_STRING: "",
+    TOO_LONG_STRING: "a".repeat(1000),
+    
+    // Emails
+    VALID_EMAIL: "test@example.com",
+    INVALID_EMAIL: "not-an-email",
+    
+    // Numbers
+    VALID_NUMBER: 42,
+    NEGATIVE_NUMBER: -1,
+    ZERO: 0,
+    
+    // Dates
+    VALID_DATE: new Date("2023-01-01"),
+    FUTURE_DATE: new Date("2030-01-01"),
+    
+    // Enums
+    VALID_ENUM_VALUE: "ACTIVE",
+    INVALID_ENUM_VALUE: "INVALID_STATUS"
+} as const
+```
+
+## Common Anti-Patterns to Avoid
+
+### ❌ Don't Test Handler Directly
+```typescript
+// WRONG: Testing handler method directly
+const operation = new SomeOperation()
+await operation.handler(mockReq, mockRes, provider)
+```
+
+### ❌ Don't Use Real Actions
+```typescript
+// WRONG: Using real action implementation
+provider.actionName = new ActionType(...)
+```
+
+### ❌ Don't Skip Error Scenarios
+```typescript
+// WRONG: Only testing success case
+it("should process request", async () => {
+    // Missing validation and error tests
+})
+```
+
+### ❌ Don't Ignore Authentication
+```typescript
+// WRONG: Not testing auth for protected endpoints
+// Missing authentication test cases
+```
+
+### ❌ Don't Create Manual Test Data
+```typescript
+// WRONG: Manual object creation instead of fixtures
+const given_valid_request = () => ({
+    field1: "hardcoded-value",
+    field2: "another-hardcoded-value",
+    field3: "yet-another-value",
+    createdAt: new Date("2023-01-01"),
+    // ... lots of manual properties
+})
+
+// ✅ CORRECT: Use fixtures
+const given_valid_request = () => aValidRequestData()
+```
+
+### ❌ Don't Duplicate Test Data
+```typescript
+// WRONG: Duplicated test data across tests
+it("should handle valid request", async () => {
+    const requestData = {
+        field1: "valid-value",
+        field2: "another-value",
+        email: "test@example.com"
+    }
+    // ...
+})
+
+it("should handle another valid request", async () => {
+    const requestData = {
+        field1: "valid-value",         // Duplicated
+        field2: "another-value",       // Duplicated
+        email: "test@example.com"      // Duplicated
+    }
+    // ...
+})
+
+// ✅ CORRECT: Use shared fixtures
+it("should handle valid request", async () => {
+    const requestData = aValidRequestData()
+    // ...
+})
+
+it("should handle another valid request", async () => {
+    const requestData = aValidRequestData()
+    // ...
+})
+```
+
+### ❌ Don't Use Vague Fixture Names
+```typescript
+// WRONG: Vague fixture names
+const getData = () => ({ /* ... */ })
+const getTestData = () => ({ /* ... */ })
+const createObject = () => ({ /* ... */ })
+
+// ✅ CORRECT: Descriptive fixture names
+const aValidRequestData = () => ({ /* ... */ })
+const anInvalidRequestWithMissingField = () => ({ /* ... */ })
+const aDomainEntityWithSpecialCase = () => ({ /* ... */ })
+```
+
+### ❌ Don't Mix Fixture Patterns
+```typescript
+// WRONG: Inconsistent fixture patterns
+const aValidRequest = () => ({ /* ... */ })        // Uses 'a' prefix
+const getInvalidRequest = () => ({ /* ... */ })    // Uses 'get' prefix
+const validResponse = () => ({ /* ... */ })        // No prefix
+const createErrorResponse = () => ({ /* ... */ })  // Uses 'create' prefix
+
+// ✅ CORRECT: Consistent fixture patterns
+const aValidRequest = () => ({ /* ... */ })
+const anInvalidRequest = () => ({ /* ... */ })
+const aValidResponse = () => ({ /* ... */ })
+const anErrorResponse = () => ({ /* ... */ })
+```
+
+## Server Lifecycle Management
+
+### Required Setup and Teardown
+Every operation test MUST properly manage server lifecycle:
+
+```typescript
+let server: any
+
+beforeEach(async () => {
+    // ... provider setup ...
+    server = await createServer(provider)
+})
+
+afterEach(async () => {
+    if (server && server.close) {
+        await new Promise<void>((resolve) => {
+            server.close(() => resolve())
+        })
+    }
+})
+```
+
+This ensures proper cleanup and prevents port conflicts between tests.
+
+## Summary
+
+HTTP Operation tests are integration tests that verify the complete request/response cycle through the HTTP layer. They MUST:
+
+1. **Test through HTTP**: Always use `supertest` to make actual HTTP requests
+2. **Mock Actions**: Never use real action implementations
+3. **Follow Given-When-Then**: Use helper methods for clear test structure
+4. **Achieve 100% Coverage**: Test all success, validation, error, and auth scenarios
+5. **Handle Authentication**: Test auth requirements for non-public operations
+6. **Manage Server Lifecycle**: Properly setup and teardown test servers
+
+These tests ensure that operations correctly handle HTTP concerns while delegating business logic to the action layer.

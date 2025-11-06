@@ -1,0 +1,821 @@
+---
+description: API Actions Test Rules
+globs: **/core_test/actions/**/*.ts,**/core_test/actions/**/*.tsx
+alwaysApply: false
+---
+
+# API Actions Test Rules
+
+## Purpose and Testing Philosophy
+
+**Testing Framework**: Use **Vitest** as the testing framework (Jest is deprecated and must be migrated ASAP)
+
+API Action tests verify the business logic and use case implementation of actions. These tests ensure:
+
+1. **Business Logic Correctness**: Actions perform their intended use cases correctly
+2. **Input Validation**: Actions properly validate input parameters
+3. **Error Handling**: Actions throw appropriate domain errors for invalid scenarios
+4. **Dependency Integration**: Actions correctly interact with repositories and services
+5. **Edge Case Handling**: Actions handle boundary conditions and special cases
+
+**CRITICAL**: Action tests MUST use in-memory repositories and mock external dependencies, never mock repository interfaces.
+
+## File Structure and Naming
+
+### File Naming Convention
+- **Pattern**: `{ActionClassName}.test.ts`
+- **Location**: Mirror the action's domain folder structure
+- **Examples**:
+  - `AddEntity.ts` → `AddEntity.test.ts`
+  - `GetEntitiesByUser.ts` → `GetEntitiesByUser.test.ts`
+
+### Directory Structure
+```
+core_test/actions/
+├── entity/                 # Entity domain actions
+├── user/                   # User domain actions
+├── order/                  # Order domain actions
+└── shared/                 # Cross-domain actions
+```
+
+## Test Structure and Organization
+
+### Required Test Structure
+All action tests MUST follow this exact structure:
+
+```typescript
+import { instance, mock, when, anything } from "ts-mockito"
+import { beforeEach, describe, expect, it } from "vitest"
+
+import ActionType from "@/core/actions/domain/ActionType"
+import DomainEntity from "@/core/domain/entity/DomainEntity"
+import { DOMAIN_ERROR_CONSTANT } from "@/core/domain/entity/Errors"
+import type Logger from "@/core/domain/Logger"
+import type ExternalService from "@/core/domain/ExternalService"
+import IdGenerator from "@/core/infrastructure/IdGenerator"
+import { InMemoryEntities } from "@/core/infrastructure/in_memory/InMemoryEntities"
+import SystemClock from "@/core/infrastructure/SystemClock"
+import { anEntity, aValidInput } from "@/core_test/fixtures/EntityFixtures"
+
+type ActionInput = {
+    field1: string
+    field2: string
+    optionalField?: string
+}
+
+describe("ActionType", () => {
+    let entities: InMemoryEntities
+    let idGenerator: IdGenerator
+    let clock: SystemClock
+    let action: ActionType
+    let mockExternalService: ExternalService
+
+    beforeEach(() => {
+        const logger = mock<Logger>()
+        entities = new InMemoryEntities(instance(logger))
+        idGenerator = new IdGenerator()
+        clock = new SystemClock()
+        mockExternalService = mock<ExternalService>()
+        
+        action = new ActionType(
+            entities,
+            idGenerator,
+            clock,
+            instance(mockExternalService)
+        )
+    })
+
+    describe("successful operation", () => {
+        it("should perform primary use case successfully", async () => {
+            // Given
+            const input = given_valid_input()
+            given_external_service_succeeds()
+
+            // When
+            const result = await when_executing_action(input)
+
+            // Then
+            then_result_should_be_correct(result, input)
+            then_entity_should_be_saved(result)
+        })
+    })
+
+    describe("validation errors", () => {
+        it("should throw domain error for invalid input", async () => {
+            // Given
+            const input = given_invalid_input()
+
+            // When/Then
+            await expect(when_executing_action(input))
+                .rejects.toThrow(DOMAIN_ERROR_CONSTANT)
+        })
+    })
+
+    describe("dependency errors", () => {
+        it("should handle external service failure", async () => {
+            // Given
+            const input = given_valid_input()
+            given_external_service_fails()
+
+            // When/Then
+            await expect(when_executing_action(input))
+                .rejects.toThrow(EXTERNAL_SERVICE_ERROR)
+        })
+    })
+
+    // Helper methods following Given-When-Then pattern
+    // ... helper implementations
+})
+```
+
+## CRITICAL RULE: Repository and Dependency Management
+
+### MUST Use In-Memory Repositories
+**Repository interfaces MUST NEVER be mocked. Always use in-memory repository implementations.**
+
+```typescript
+// ✅ CORRECT: Use in-memory repository
+let entities: InMemoryEntities
+
+beforeEach(() => {
+    const logger = mock<Logger>()
+    entities = new InMemoryEntities(instance(logger))
+
+    action = new ActionType(
+        entities,              // Real in-memory implementation
+        idGenerator,
+        clock,
+        instance(mockService)
+    )
+})
+
+// ❌ FORBIDDEN: Mock repository interface
+let mockEntities: Entities
+
+beforeEach(() => {
+    mockEntities = mock<Entities>()  // NEVER DO THIS
+
+    action = new ActionType(
+        instance(mockEntities),  // Wrong approach
+        idGenerator,
+        clock,
+        instance(mockService)
+    )
+})
+```
+
+### MUST Use InMemoryRemote for Dual-Purpose Repositories
+**When a domain interface has both local and remote implementations in production, use InMemoryRemote to simulate both.**
+
+```typescript
+// ✅ CORRECT: Use InMemoryRemote for repositories that simulate remote services
+let remoteConfigItems: InMemoryRemoteConfigurationItems
+let remoteUsers: InMemoryRemoteUsers
+
+beforeEach(() => {
+    const logger = mock<Logger>()
+    remoteConfigItems = new InMemoryRemoteConfigurationItems(logger)
+    remoteUsers = new InMemoryRemoteUsers()
+
+    action = new AnalyzeDefectAction(
+        remoteConfigItems,  // Simulates both local DB and remote service
+        remoteUsers,        // Simulates remote user service
+        idGenerator,
+        clock
+    )
+})
+
+// ❌ FORBIDDEN: Mock repository or use plain InMemory when remote operations exist
+let mockConfigItems: ConfigurationItems
+let configItems: InMemoryConfigurationItems  // Wrong - doesn't simulate remote operations
+
+beforeEach(() => {
+    mockConfigItems = mock<ConfigurationItems>()  // NEVER mock
+    configItems = new InMemoryConfigurationItems(logger)  // Wrong if remote ops needed
+})
+
+// Note: Use 'remote' prefix for variable names (e.g., remoteUsers, remoteProducts, remoteOrders)
+// to clearly distinguish remote repositories from local ones (e.g., users, products, orders)
+```
+
+### Infrastructure Components: Mock When Needed
+**IdGenerator and SystemClock SHOULD be mocked when deterministic behavior is required for testing.**
+
+```typescript
+// ✅ CORRECT: Mock infrastructure components for deterministic tests
+let mockIdGenerator: IdGenerator
+let mockClock: Clock
+
+beforeEach(() => {
+    mockIdGenerator = mock<IdGenerator>()
+    mockClock = mock<Clock>()
+
+    // Setup deterministic behavior
+    when(mockIdGenerator.generate()).thenReturn("test-id-123")
+    when(mockClock.now()).thenReturn(new Date("2024-01-01T00:00:00Z"))
+
+    action = new ActionType(
+        entities,
+        instance(mockIdGenerator),
+        instance(mockClock),
+        instance(mockService)
+    )
+})
+
+// ⚠️ ACCEPTABLE: Use real implementations only when testing randomness/timing
+beforeEach(() => {
+    const idGenerator = new IdGenerator()    // Real for UUID generation tests
+    const clock = new SystemClock()          // Real for timestamp tests
+
+    action = new ActionType(
+        entities,
+        idGenerator,
+        clock,
+        instance(mockService)
+    )
+})
+
+// Note: Real implementations generate random IDs and timestamps, making tests non-deterministic.
+// Mock them to ensure consistent, reproducible test results.
+```
+
+### What to Mock vs What Not to Mock
+- **MUST Mock**: External services, loggers, validators, enrichment services, IdGenerator, Clock
+- **DON'T Mock**: Repository interfaces, domain entities
+- **In-Memory Setup**: Always use in-memory repository implementations
+- **InMemoryRemote Setup**: Use InMemoryRemote when simulating both local and remote operations
+- **Infrastructure**: Mock IdGenerator and Clock for deterministic test results
+
+### Choosing Between InMemory and InMemoryRemote
+- **Use InMemory**: When the repository only handles local database operations (e.g., `InMemoryCodebases`, `InMemoryCommits`, `InMemoryOrders`)
+- **Use InMemoryRemote**: When production has separate implementations for local (e.g., `PostgresRepository`) and remote (e.g., `RemoteUsers`, `RemoteProducts`) operations
+- **Key indicator**: If the domain interface has methods that query external services in production, use InMemoryRemote
+- **Naming in tests**: Use `remote` prefix for variables (e.g., `remoteUsers`, `remoteProducts`) vs local repositories (e.g., `users`, `products`)
+- **Production classes**: Remote repositories follow pattern `Remote{Entity}` (e.g., `RemoteUsers`, `RemoteProducts`, `RemoteOrders`)
+
+## Given-When-Then Pattern with Fixtures
+
+### Required Helper Method Structure
+All tests MUST use Given-When-Then helper methods with comprehensive fixture usage:
+
+```typescript
+// Given helpers - Setup test preconditions using fixtures
+const given_valid_input = (): ActionInput => aValidActionInput()
+
+const given_minimal_input = (): ActionInput => aMinimalActionInput()
+
+const given_invalid_input = (): ActionInput => anInvalidActionInput()
+
+const given_input_with_missing_field = (): ActionInput => ({
+    ...aValidActionInput(),
+    field1: TEST_CONSTANTS.EMPTY_STRING
+})
+
+const given_existing_entity = async (): Promise<DomainEntity> => {
+    const entity = anEntity()
+    await entities.save(entity)
+    return entity
+}
+
+const given_external_service_succeeds = () => {
+    when(mockExternalService.process(anything()))
+        .thenResolve(aSuccessfulServiceResponse())
+}
+
+const given_external_service_fails = () => {
+    when(mockExternalService.process(anything()))
+        .thenReject(EXTERNAL_SERVICE_ERROR)
+}
+
+const given_external_service_returns_invalid_data = () => {
+    when(mockExternalService.process(anything()))
+        .thenResolve(anInvalidServiceResponse())
+}
+
+// When helpers - Execute the action being tested
+const when_executing_action = async (input: ActionInput): Promise<DomainEntity> => {
+    return await action.execute(input)
+}
+
+// Then helpers - Verify expected outcomes using fixtures
+const then_result_should_be_correct = (result: DomainEntity, input: ActionInput) => {
+    expect(result.Field1).toBe(input.field1)
+    expect(result.Field2).toBe(input.field2)
+    expect(result.Id).toBeDefined()
+    expect(result.CreatedAt).toBeInstanceOf(Date)
+}
+
+const then_result_should_have_generated_id = (result: DomainEntity) => {
+    expect(result.Id).toBeDefined()
+    expect(result.Id).not.toBe("")
+    expect(typeof result.Id).toBe("string")
+}
+
+const then_result_should_have_timestamp = (result: DomainEntity) => {
+    expect(result.CreatedAt).toBeDefined()
+    expect(result.CreatedAt).toBeInstanceOf(Date)
+    expect(Math.abs(result.CreatedAt.getTime() - Date.now())).toBeLessThan(1000)
+}
+
+const then_entity_should_be_saved = async (result: DomainEntity) => {
+    const saved = await entities.getById(result.Id)
+    expect(saved).toBeDefined()
+    expect(saved!.Id).toBe(result.Id)
+}
+
+const then_entity_should_not_be_saved = async (entityId: string) => {
+    const saved = await entities.getById(entityId)
+    expect(saved).toBeNull()
+}
+
+const then_entities_should_have_different_ids = (entity1: DomainEntity, entity2: DomainEntity) => {
+    expect(entity1.Id).not.toBe(entity2.Id)
+}
+```
+
+## Comprehensive Test Coverage Requirements
+
+### Mandatory Test Scenarios
+Every action test MUST include these test scenarios:
+
+#### 1. Successful Operation Scenarios
+```typescript
+describe("successful operation", () => {
+    it("should perform primary use case with all fields", async () => {
+        // Given
+        const input = given_valid_input()
+        given_all_dependencies_succeed()
+
+        // When
+        const result = await when_executing_action(input)
+
+        // Then
+        then_result_should_be_correct(result, input)
+        then_result_should_have_generated_id(result)
+        then_result_should_have_timestamp(result)
+        then_entity_should_be_saved(result)
+    })
+
+    it("should work with minimal required fields", async () => {
+        // Given
+        const input = given_minimal_input()
+        given_all_dependencies_succeed()
+
+        // When
+        const result = await when_executing_action(input)
+
+        // Then
+        then_result_should_be_correct(result, input)
+        then_entity_should_be_saved(result)
+    })
+
+    it("should handle optional fields correctly", async () => {
+        // Given
+        const input = given_input_with_optional_fields()
+        given_all_dependencies_succeed()
+
+        // When
+        const result = await when_executing_action(input)
+
+        // Then
+        then_result_should_include_optional_fields(result, input)
+    })
+
+    it("should generate unique identifiers", async () => {
+        // Given
+        const input1 = given_valid_input()
+        const input2 = given_another_valid_input()
+        given_all_dependencies_succeed()
+
+        // When
+        const result1 = await when_executing_action(input1)
+        const result2 = await when_executing_action(input2)
+
+        // Then
+        then_entities_should_have_different_ids(result1, result2)
+    })
+})
+```
+
+#### 2. Input Validation Scenarios
+```typescript
+describe("input validation", () => {
+    it("should throw domain error for empty required field", async () => {
+        // Given
+        const input = given_input_with_empty_required_field()
+
+        // When/Then
+        await expect(when_executing_action(input))
+            .rejects.toThrow(INVALID_FIELD_ERROR)
+    })
+
+    it("should throw domain error for invalid field format", async () => {
+        // Given
+        const input = given_input_with_invalid_format()
+
+        // When/Then
+        await expect(when_executing_action(input))
+            .rejects.toThrow(INVALID_FORMAT_ERROR)
+    })
+
+    it("should throw domain error for field too long", async () => {
+        // Given
+        const input = given_input_with_too_long_field()
+
+        // When/Then
+        await expect(when_executing_action(input))
+            .rejects.toThrow(FIELD_TOO_LONG_ERROR)
+    })
+
+    it("should throw domain error for duplicate entity", async () => {
+        // Given
+        const input = given_valid_input()
+        await given_entity_already_exists_with_same_identifier(input)
+
+        // When/Then
+        await expect(when_executing_action(input))
+            .rejects.toThrow(DUPLICATE_ENTITY_ERROR)
+    })
+})
+```
+
+#### 3. Dependency Error Scenarios
+```typescript
+describe("dependency errors", () => {
+    it("should handle external service failure", async () => {
+        // Given
+        const input = given_valid_input()
+        given_external_service_fails()
+
+        // When/Then
+        await expect(when_executing_action(input))
+            .rejects.toThrow(EXTERNAL_SERVICE_ERROR)
+    })
+
+    it("should handle external service timeout", async () => {
+        // Given
+        const input = given_valid_input()
+        given_external_service_times_out()
+
+        // When/Then
+        await expect(when_executing_action(input))
+            .rejects.toThrow(SERVICE_TIMEOUT_ERROR)
+    })
+
+    it("should handle external service invalid response", async () => {
+        // Given
+        const input = given_valid_input()
+        given_external_service_returns_invalid_data()
+
+        // When/Then
+        await expect(when_executing_action(input))
+            .rejects.toThrow(INVALID_SERVICE_RESPONSE_ERROR)
+    })
+})
+```
+
+#### 4. Edge Cases and Business Rules
+```typescript
+describe("edge cases", () => {
+    it("should handle special characters in input", async () => {
+        // Given
+        const input = given_input_with_special_characters()
+        given_all_dependencies_succeed()
+
+        // When
+        const result = await when_executing_action(input)
+
+        // Then
+        then_result_should_handle_special_characters(result, input)
+    })
+
+    it("should handle maximum field lengths", async () => {
+        // Given
+        const input = given_input_with_maximum_field_lengths()
+        given_all_dependencies_succeed()
+
+        // When
+        const result = await when_executing_action(input)
+
+        // Then
+        then_result_should_handle_maximum_lengths(result, input)
+    })
+
+    it("should handle concurrent operations", async () => {
+        // Given
+        const input1 = given_valid_input()
+        const input2 = given_another_valid_input()
+        given_all_dependencies_succeed()
+
+        // When
+        const [result1, result2] = await Promise.all([
+            when_executing_action(input1),
+            when_executing_action(input2)
+        ])
+
+        // Then
+        then_entities_should_have_different_ids(result1, result2)
+        then_both_entities_should_be_saved(result1, result2)
+    })
+})
+```
+
+## Fixture Usage for Action Tests
+
+### Test Data Fixtures
+Create comprehensive fixtures for all test scenarios:
+
+```typescript
+// Input fixtures
+const aValidActionInput = (): ActionInput => ({
+    field1: TEST_CONSTANTS.VALID_FIELD1,
+    field2: TEST_CONSTANTS.VALID_FIELD2,
+    optionalField: TEST_CONSTANTS.OPTIONAL_VALUE
+})
+
+const aMinimalActionInput = (): ActionInput => ({
+    field1: TEST_CONSTANTS.VALID_FIELD1,
+    field2: TEST_CONSTANTS.VALID_FIELD2
+})
+
+const anInvalidActionInput = (): ActionInput => ({
+    field1: TEST_CONSTANTS.EMPTY_STRING,
+    field2: TEST_CONSTANTS.VALID_FIELD2
+})
+
+const anInputWithSpecialCharacters = (): ActionInput => ({
+    field1: TEST_CONSTANTS.SPECIAL_CHARACTERS,
+    field2: TEST_CONSTANTS.UNICODE_STRING,
+    optionalField: TEST_CONSTANTS.EMOJI_STRING
+})
+
+const anInputWithMaximumLengths = (): ActionInput => ({
+    field1: TEST_CONSTANTS.MAX_LENGTH_STRING,
+    field2: TEST_CONSTANTS.ANOTHER_MAX_LENGTH_STRING
+})
+
+// Service response fixtures
+const aSuccessfulServiceResponse = () => ({
+    status: "success",
+    data: {
+        processedField: TEST_CONSTANTS.PROCESSED_VALUE
+    }
+})
+
+const anInvalidServiceResponse = () => ({
+    status: "error",
+    data: null
+})
+
+// Entity fixtures for existing data
+const anExistingEntity = (): DomainEntity => anEntity({
+    id: TEST_CONSTANTS.EXISTING_ID,
+    field1: TEST_CONSTANTS.EXISTING_FIELD1
+})
+```
+
+### Test Constants Organization
+```typescript
+const TEST_CONSTANTS = {
+    // Valid values
+    VALID_FIELD1: "valid-field-1",
+    VALID_FIELD2: "valid-field-2",
+    OPTIONAL_VALUE: "optional-value",
+    
+    // Invalid values
+    EMPTY_STRING: "",
+    NULL_VALUE: null as any,
+    UNDEFINED_VALUE: undefined as any,
+    
+    // Edge case values
+    SPECIAL_CHARACTERS: "field-with-@#$%^&*()_+",
+    UNICODE_STRING: "field-with-ñáéíóú",
+    EMOJI_STRING: "field-with-😀🎉🚀",
+    MAX_LENGTH_STRING: "a".repeat(255),
+    TOO_LONG_STRING: "a".repeat(256),
+    
+    // IDs and references
+    EXISTING_ID: "existing-entity-id",
+    ANOTHER_ID: "another-entity-id",
+    
+    // Service responses
+    PROCESSED_VALUE: "processed-by-service"
+} as const
+```
+
+### Scenario-Based Fixture Groups
+```typescript
+const SUCCESS_FIXTURES = {
+    validInput: () => aValidActionInput(),
+    minimalInput: () => aMinimalActionInput(),
+    inputWithOptionals: () => anInputWithOptionalFields(),
+    serviceResponse: () => aSuccessfulServiceResponse()
+} as const
+
+const VALIDATION_ERROR_FIXTURES = {
+    emptyField: () => ({ ...aValidActionInput(), field1: TEST_CONSTANTS.EMPTY_STRING }),
+    tooLongField: () => ({ ...aValidActionInput(), field1: TEST_CONSTANTS.TOO_LONG_STRING }),
+    invalidFormat: () => ({ ...aValidActionInput(), field2: "invalid-format" }),
+    missingRequired: () => ({ field1: TEST_CONSTANTS.VALID_FIELD1 }) // Missing field2
+} as const
+
+const ERROR_FIXTURES = {
+    serviceFailure: () => new Error("Service unavailable"),
+    serviceTimeout: () => new Error("Service timeout"),
+    invalidResponse: () => anInvalidServiceResponse()
+} as const
+```
+
+## Mock Management for External Dependencies
+
+### External Service Mocking Patterns
+```typescript
+// Service success scenarios
+const given_all_dependencies_succeed = () => {
+    when(mockExternalService.process(anything()))
+        .thenResolve(SUCCESS_FIXTURES.serviceResponse())
+    when(mockValidator.validate(anything()))
+        .thenResolve(true)
+    when(mockEnrichmentService.enrich(anything()))
+        .thenResolve(anEnrichedData())
+}
+
+// Service failure scenarios
+const given_external_service_fails = () => {
+    when(mockExternalService.process(anything()))
+        .thenReject(ERROR_FIXTURES.serviceFailure())
+}
+
+const given_external_service_times_out = () => {
+    when(mockExternalService.process(anything()))
+        .thenReject(ERROR_FIXTURES.serviceTimeout())
+}
+
+// Validation scenarios
+const given_validation_fails = () => {
+    when(mockValidator.validate(anything()))
+        .thenReject(VALIDATION_FAILED_ERROR)
+}
+
+// Repository state setup (using in-memory repository)
+const given_entity_already_exists_with_same_identifier = async (input: ActionInput) => {
+    const existingEntity = anEntity({
+        field1: input.field1,
+        field2: input.field2
+    })
+    await entities.save(existingEntity)
+}
+
+const given_repository_is_empty = async () => {
+    // In-memory repository starts empty, but explicit for clarity
+    const allEntities = await entities.getAll()
+    expect(allEntities).toHaveLength(0)
+}
+
+// InMemoryRemote state setup (for dual-purpose repositories)
+const given_remote_user_exists = () => {
+    remoteUsers.setUserSysId("john.doe", "sys-id-12345")
+}
+
+const given_remote_product_exists = () => {
+    remoteProducts.setProduct("product-123", {
+        name: "Premium Widget",
+        price: 99.99,
+        category: "Electronics"
+    })
+}
+
+const given_remote_config_item_fields_exist = () => {
+    remoteConfigItems.setConfigItemFields("server-001", {
+        assignmentGroup: "IT-Support",
+        productLine: "Infrastructure"
+    })
+}
+
+const given_local_and_remote_data_exist = async () => {
+    // Local data (database)
+    const configItem = aConfigurationItem({ name: "server-001" })
+    await remoteConfigItems.put(configItem, anEmbedding())
+
+    // Remote data (external service)
+    remoteConfigItems.setConfigItemFields("server-001", {
+        assignmentGroup: "IT-Support",
+        productLine: "Infrastructure"
+    })
+}
+
+// Note: Helper methods use 'remote' prefix consistently (e.g., remoteUsers, remoteProducts, remoteOrders)
+// to distinguish from local repository helpers (e.g., users, products, orders)
+```
+
+## Error Testing Patterns
+
+### Domain Error Testing
+```typescript
+// Import domain errors
+import { 
+    ENTITY_NOT_FOUND, 
+    DUPLICATE_ENTITY, 
+    INVALID_FIELD_FORMAT,
+    FIELD_TOO_LONG 
+} from "@/core/domain/entity/Errors"
+
+// Test domain error throwing
+it("should throw specific domain error for business rule violation", async () => {
+    // Given
+    const input = given_input_that_violates_business_rule()
+
+    // When/Then
+    await expect(when_executing_action(input))
+        .rejects.toThrow(BUSINESS_RULE_VIOLATION_ERROR)
+})
+
+// Test error propagation from dependencies
+it("should propagate domain errors from repository operations", async () => {
+    // Given
+    const input = given_valid_input()
+    await given_entity_already_exists_with_same_identifier(input)
+
+    // When/Then
+    await expect(when_executing_action(input))
+        .rejects.toThrow(DUPLICATE_ENTITY)
+})
+```
+
+## Common Anti-Patterns to Avoid
+
+### ❌ Don't Mock Repository Interfaces
+```typescript
+// WRONG: Mocking repository interface
+let mockEntities: Entities
+beforeEach(() => {
+    mockEntities = mock<Entities>()
+    action = new ActionType(instance(mockEntities), ...)
+})
+```
+
+### ✅ Mock Infrastructure Components for Deterministic Tests
+```typescript
+// CORRECT: Mock IdGenerator and Clock for predictable test results
+let mockIdGenerator: IdGenerator
+let mockClock: Clock
+beforeEach(() => {
+    mockIdGenerator = mock<IdGenerator>()
+    mockClock = mock<Clock>()
+
+    when(mockIdGenerator.generate()).thenReturn("deterministic-id")
+    when(mockClock.now()).thenReturn(new Date("2024-01-01"))
+})
+```
+
+### ❌ Don't Create Manual Test Data
+```typescript
+// WRONG: Manual test data creation
+const given_valid_input = () => ({
+    field1: "hardcoded-value",
+    field2: "another-hardcoded-value",
+    // ... manual properties
+})
+
+// ✅ CORRECT: Use fixtures
+const given_valid_input = () => aValidActionInput()
+```
+
+### ❌ Don't Skip Edge Cases
+```typescript
+// WRONG: Only testing happy path
+describe("ActionType", () => {
+    it("should work with valid input", async () => {
+        // Missing validation, error, and edge case tests
+    })
+})
+```
+
+### ❌ Don't Test Implementation Details
+```typescript
+// WRONG: Testing internal method calls
+it("should call repository save method", async () => {
+    // Don't verify internal method calls
+    verify(mockRepository.save(anything())).once()
+})
+
+// ✅ CORRECT: Test behavior and outcomes
+it("should save entity successfully", async () => {
+    const result = await when_executing_action(input)
+    then_entity_should_be_saved(result)
+})
+```
+
+## Summary
+
+API Action tests verify business logic through comprehensive scenarios using:
+
+1. **In-Memory Repositories**: Never mock repository interfaces
+2. **Mock Infrastructure**: Mock IdGenerator and Clock for deterministic, reproducible tests
+3. **Mock External Services**: Mock services, validators, enrichment services
+4. **Given-When-Then**: Clear test structure with fixture-based helpers
+5. **Comprehensive Coverage**: Success, validation, error, and edge case scenarios
+6. **Fixture Usage**: Maximize reusability and readability through fixtures
+7. **Domain Error Testing**: Verify proper domain error throwing and propagation
+
+These tests ensure actions correctly implement business use cases while maintaining clean, readable, and maintainable test code with deterministic results.

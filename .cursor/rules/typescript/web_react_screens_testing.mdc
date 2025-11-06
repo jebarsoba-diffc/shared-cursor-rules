@@ -1,0 +1,190 @@
+---
+description: Web React Screens Testing
+globs: **/web/src/web_spec/screens/**/*.ts,**/web/src/web_spec/screens/**/*.tsx
+alwaysApply: false
+---
+
+# Web React Screens Testing
+
+## Overview
+This document defines the standards and best practices for testing React screen components in the web application layer.
+
+## Scope
+- **Target Files**: `web/src/web_spec/screens/**/*.spec.tsx`
+- **Purpose**: Unit and integration tests for React screen components
+- **Testing Framework**: **Vitest** with React Testing Library and ts-mockito (Jest is deprecated and must be migrated ASAP)
+
+## Code Review Standards
+
+### 1. Test Structure
+- **Testing Framework**: Use Vitest as the primary testing framework
+- **Component Testing**: Use React Testing Library for component testing
+- **Mocking**: Use ts-mockito for mocking dependencies
+- **Organization**: Organize tests in `describe` blocks by component name
+- **Test Names**: Use descriptive test names that explain the expected behavior
+
+### 2. Mock Setup
+- **External Dependencies**: Mock external dependencies using `vi.mock()`
+- **Typed Mocks**: Create typed mock providers for dependency injection
+- **Mock Instances**: Use ts-mockito for creating mock instances (`mock()`, `instance()`)
+- **Router Mocking**: Mock React Router components when needed (`MemoryRouter`)
+- **Context Providers**: Mock context providers (`NotificationProvider`, `UserProvider`)
+
+### 3. Test Cases Coverage
+- **Basic Rendering**: Test component rendering without crashing
+- **UI Elements**: Test that main UI elements are present
+- **User Interactions**: Test user interactions and event handlers
+- **State Management**: Test loading states and error handling
+- **Data Operations**: Test data fetching and state updates
+- **Navigation**: Test navigation and routing behavior
+
+### 4. Test Utilities
+- **Render Utilities**: Create reusable render utilities with providers
+- **Cleanup**: Use proper cleanup in `beforeEach`/`afterEach` hooks
+- **Async Operations**: Use `waitFor` for async operations
+- **User Events**: Use `fireEvent` and `userEvent` for user interactions
+- **State Updates**: Use `act()` wrapper for state updates
+
+### 5. Assertions
+- **Descriptive Matchers**: Use `expect()` assertions with descriptive matchers
+- **Test Coverage**: Test both positive and negative cases
+- **Mock Verification**: Verify mock function calls with proper arguments
+- **State Testing**: Test component state changes after interactions
+- **Element Selection**: Use `data-testid` attributes for reliable element selection
+
+### 6. Coverage Requirements
+- **Minimum Coverage**: Achieve minimum 80% code coverage
+- **Public Methods**: Test all public methods and user interactions
+- **Edge Cases**: Test error scenarios and edge cases
+- **Lifecycle**: Test component lifecycle methods
+- **Conditional Logic**: Test conditional rendering logic
+
+### 7. Performance Testing
+- **Large Datasets**: Test component performance with large datasets
+- **Memory Leaks**: Verify memory leaks don't occur
+- **Render Performance**: Test render performance with complex state
+- **Re-render Optimization**: Validate that unnecessary re-renders are avoided
+
+## Examples
+
+### Basic Test Structure
+```tsx
+import { render, screen } from "@testing-library/react"
+import { instance, mock } from "ts-mockito"
+import { describe, expect, it, vi } from "vitest"
+import { MemoryRouter } from "react-router-dom"
+
+import type GetItems from "@/core/actions/item/GetItems"
+import { NotificationProvider } from "@/web/contexts/NotificationsContext"
+import ExampleScreen from "@/web/screens/example/ExampleScreen"
+
+// Mock external dependencies
+vi.mock("@/web/contexts/NotificationsContext", () => ({
+    useNotification: () => ({
+        showNotification: vi.fn(),
+    }),
+}))
+
+type MockProvider = {
+    getItems: GetItems
+}
+
+describe("ExampleScreen", () => {
+    const createMockProvider = (): MockProvider => ({
+        getItems: instance(mock<GetItems>()),
+    })
+
+    const renderWithProviders = () => {
+        const provider = createMockProvider()
+        return render(
+            <MemoryRouter>
+                <NotificationProvider>
+                    <ExampleScreen provider={provider} />
+                </NotificationProvider>
+            </MemoryRouter>
+        )
+    }
+
+    it("should render without crashing", () => {
+        expect(() => renderWithProviders()).not.toThrow()
+    })
+
+    it("should display the main heading", () => {
+        renderWithProviders()
+        expect(screen.getByRole("heading")).toBeInTheDocument()
+    })
+})
+```
+
+### Mock Setup Example
+```tsx
+import { anything, deepEqual, instance, mock, verify, when } from "ts-mockito"
+
+// Create typed mock
+const mockGetItems = mock<GetItems>()
+const mockProvider = {
+    getItems: instance(mockGetItems)
+}
+
+// Setup mock behavior
+when(mockGetItems.execute()).thenResolve({
+    success: true,
+    data: mockItems
+})
+
+// Verify mock calls
+verify(mockGetItems.execute()).once()
+```
+
+### Async Testing Example
+```tsx
+import { act, fireEvent, waitFor } from "@testing-library/react"
+
+it("should handle async operations", async () => {
+    renderWithProviders()
+    
+    const button = screen.getByRole("button", { name: /submit/i })
+    
+    await act(async () => {
+        fireEvent.click(button)
+    })
+    
+    await waitFor(() => {
+        expect(screen.getByText("Success")).toBeInTheDocument()
+    })
+})
+```
+
+### Error Handling Test
+```tsx
+it("should handle errors gracefully", async () => {
+    // Setup mock to throw error
+    when(mockGetItems.execute()).thenReject(new Error("API Error"))
+    
+    renderWithProviders()
+    
+    await waitFor(() => {
+        expect(screen.getByText(/error/i)).toBeInTheDocument()
+    })
+})
+```
+
+## Review Checklist
+
+- [ ] Test file follows naming convention (`*.spec.tsx`)
+- [ ] Uses Vitest testing framework
+- [ ] Uses React Testing Library for component testing
+- [ ] Uses ts-mockito for mocking
+- [ ] Includes proper mock setup for dependencies
+- [ ] Tests basic rendering without crashing
+- [ ] Tests main UI elements presence
+- [ ] Tests user interactions
+- [ ] Tests loading and error states
+- [ ] Tests async operations with proper waiting
+- [ ] Uses descriptive test names
+- [ ] Achieves adequate code coverage
+- [ ] Includes cleanup in lifecycle hooks
+- [ ] Uses proper assertions
+- [ ] Verifies mock function calls
+- [ ] Tests navigation behavior when applicable
+- [ ] Follows patterns from existing test files

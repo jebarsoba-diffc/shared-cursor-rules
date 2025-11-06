@@ -1,0 +1,100 @@
+---
+description: API Utils Rules
+globs: **/core/utils/**/*.ts,**/core/utils/**/*.tsx
+alwaysApply: false
+---
+
+# API Utils Rules
+
+## Purpose and Structure
+
+The utils layer contains **pure utility functions and helpers** that don't fit into the domain, actions, or infrastructure layers. Utilities should:
+
+1. **Be stateless, pure functions** that operate on their inputs without side effects
+2. **Have no external dependencies** (no database access, no API calls, no file I/O)
+3. **Be highly reusable** across different parts of the application
+4. **Be organized by domain or purpose** in subdirectories (e.g., `/utils/code_review/`, `/utils/string/`)
+
+## What Belongs in Utils
+
+Utilities are appropriate for:
+
+- **Parsing logic** (e.g., parsing markdown, JSON, or domain-specific formats)
+- **String manipulation** (e.g., formatting, validation, transformation)
+- **Data transformation** (e.g., mapping, filtering, grouping)
+- **Calculation helpers** (e.g., mathematical operations, statistics)
+- **Type guards and validators** (e.g., runtime type checking)
+
+## What Does NOT Belong in Utils
+
+Do NOT place the following in utils:
+
+- **Domain entities** → Use `/core/domain/`
+- **Business logic/use cases** → Use `/core/actions/`
+- **External system integrations** → Use `/core/infrastructure/`
+- **Stateful services** → Use `/core/infrastructure/`
+- **HTTP operations** → Use `/http/operations/`
+
+## Example
+
+```typescript
+export interface ParsedIssue {
+    severity: "High" | "Medium" | "Low"
+    title: string
+    description: string
+    location?: string
+}
+
+export interface ParsedReview {
+    priority: string
+    issues: ParsedIssue[]
+}
+
+/**
+ * Parses a code review markdown text and extracts individual issues
+ * with their severity levels.
+ */
+export function parseReview(reviewText: string): ParsedReview {
+    const lines = reviewText.split("\n")
+    const issues: ParsedIssue[] = []
+    let priority = "NOT_RATED"
+
+    // Extract priority from the first line
+    const priorityMatch = reviewText.match(/PRIORITY:\s*(RED|YELLOW|GREEN|NOT_RATED)/i)
+    if (priorityMatch) {
+        priority = priorityMatch[1].toUpperCase()
+    }
+
+    // ... parsing logic
+
+    return {
+        priority,
+        issues,
+    }
+}
+
+/**
+ * Counts issues by severity level
+ */
+export function countIssuesBySeverity(issues: ParsedIssue[]): {
+    critical: number
+    moderate: number
+    low: number
+} {
+    return {
+        critical: issues.filter((i) => i.severity === "High").length,
+        moderate: issues.filter((i) => i.severity === "Medium").length,
+        low: issues.filter((i) => i.severity === "Low").length,
+    }
+}
+```
+
+## Best Practices
+
+1. **Pure Functions:** Utilities should be deterministic - same input always produces same output
+2. **No Side Effects:** No mutations, no I/O, no state changes
+3. **Type Safety:** Use TypeScript types and interfaces for all inputs and outputs
+4. **Documentation:** Add JSDoc comments explaining what the utility does
+5. **Testing:** All utilities should have comprehensive unit tests
+6. **Single Responsibility:** Each utility file should have a focused purpose
+7. **Export Named Functions:** Prefer named exports over default exports for utilities

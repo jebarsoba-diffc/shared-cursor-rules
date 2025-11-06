@@ -1,0 +1,227 @@
+---
+description: Web Core Actions Rules
+globs: **/web/src/core/actions/**/*.ts,**/web/src/core/actions/**/*.tsx
+alwaysApply: false
+---
+
+# Web Core Actions Rules
+
+## Purpose and Structure
+
+Web Core Actions represent frontend use cases that interact with the API backend. Each Action should:
+
+1. Implement exactly one use case from the frontend perspective
+2. Have a meaningful name that reflects its purpose (e.g., `GetItems`, `AddItem`, `UpdateItem`)
+3. Reside in an appropriate domain folder structure that MUST match the name of the domain of the use case (e.g., actions for Items should be in `/item`, actions for Users in `/user`)
+4. Act as a bridge between the frontend UI and the backend API
+
+## Example
+
+```typescript
+import type { Item } from "@/core/domain/item/Item"
+import type ApiClient from "@/core/infrastructure/ApiClient"
+
+export default class GetItems {
+    constructor(private readonly apiClient: ApiClient) {}
+
+    async execute(): Promise<Item[]> {
+        const response = await this.apiClient.post("/get_items", {})
+        return response as Item[]
+    }
+}
+```
+
+## Dependency Injection
+
+1. Actions MUST receive all dependencies through the constructor
+2. All dependencies MUST be declared as `private readonly`
+3. The primary dependency SHOULD be the `ApiClient` for HTTP communication
+4. Additional dependencies MAY include utilities like loggers or validators
+
+```typescript
+// CORRECT
+constructor(private readonly apiClient: ApiClient) {}
+
+// CORRECT with multiple dependencies
+constructor(
+    private readonly apiClient: ApiClient,
+    private readonly logger: Logger,
+    private readonly validator: Validator
+) {}
+
+// INCORRECT
+constructor(
+    private apiClient: ApiClient, // Missing readonly
+    public logger: Logger, // Should be private
+    readonly validator: Validator // Missing private
+) {}
+```
+
+## Method Requirements
+
+1. Actions MUST have exactly one public method named `execute`
+2. The `execute` method MUST be `async`
+3. The `execute` method MUST have well-defined parameter and return types
+4. The `execute` method SHOULD have a single return point
+5. Parameters SHOULD be grouped in a single object when multiple parameters are needed
+
+```typescript
+// CORRECT - Simple parameters
+async execute(): Promise<Item[]> {
+    const response = await this.apiClient.post("/get_items", {})
+    return response as Item[]
+}
+
+// CORRECT - Multiple parameters grouped
+async execute(params: {
+    name: string
+    category: string
+    description?: string
+}): Promise<Item> {
+    const response = await this.apiClient.post("/add_item", params)
+    return response as Item
+}
+
+// INCORRECT - Missing async
+execute(): Promise<Item[]> {
+    // ...
+}
+
+// INCORRECT - Multiple separate parameters
+async execute(name: string, category: string, description: string): Promise<Item> {
+    // ...
+}
+```
+
+## API Communication
+
+1. Actions MUST use the `ApiClient` for HTTP communication
+2. API endpoints SHOULD be consistent with backend API routes
+3. Request data SHOULD be passed directly to the API when possible
+4. Response data MUST be properly typed using domain types
+
+```typescript
+// CORRECT
+async execute(params: AddItemParams): Promise<Item> {
+    const response = await this.apiClient.post("/add_item", params)
+    return response as Item
+}
+
+// CORRECT - GET request
+async execute(id: string): Promise<Item> {
+    const response = await this.apiClient.get(`/item/${id}`)
+    return response as Item
+}
+
+// INCORRECT - Direct fetch usage
+async execute(): Promise<Item[]> {
+    const response = await fetch("/api/items")
+    return await response.json()
+}
+```
+
+## Type Safety
+
+1. Actions MUST import and use proper domain types for return values
+2. Type assertions SHOULD be used when casting API responses to domain types
+3. Parameter types SHOULD be explicitly defined, preferably as interfaces or type aliases
+4. Optional parameters MUST be properly marked with `?`
+
+```typescript
+// CORRECT
+import type { Item } from "@/core/domain/item/Item"
+
+async execute(): Promise<Item[]> {
+    const response = await this.apiClient.post("/get_items", {})
+    return response as Item[]
+}
+
+// CORRECT - With type definition
+type UpdateItemParams = {
+    id: string
+    name?: string
+    category?: string
+}
+
+async execute(params: UpdateItemParams): Promise<Item> {
+    const response = await this.apiClient.put(`/item/${params.id}`, params)
+    return response as Item
+}
+```
+
+## Error Handling
+
+1. Actions SHOULD let API errors bubble up to be handled by the UI layer
+2. Actions SHOULD NOT catch and suppress errors unless specific handling is required
+3. Input validation SHOULD occur at the beginning of the execute method when necessary
+4. Type validation SHOULD be performed on API responses when critical
+
+```typescript
+// CORRECT - Let errors bubble up
+async execute(id: string): Promise<Item> {
+    const response = await this.apiClient.get(`/item/${id}`)
+    return response as Item
+}
+
+// CORRECT - With input validation
+async execute(params: { name: string; description: string }): Promise<Item> {
+    if (!params.name.trim()) {
+        throw new Error("Item name cannot be empty")
+    }
+    
+    const response = await this.apiClient.post("/add_item", params)
+    return response as Item
+}
+```
+
+## Import Organization
+
+1. Domain types MUST be imported first
+2. Infrastructure dependencies (ApiClient) MUST be imported second
+3. Utility types and functions SHOULD be imported last
+4. All imports MUST use the `@/` alias for internal modules
+
+```typescript
+// CORRECT import order
+import type { Item } from "@/core/domain/item/Item"
+import type ApiClient from "@/core/infrastructure/ApiClient"
+import type { Logger } from "@/core/utils/Logger"
+
+// INCORRECT - Wrong order
+import type ApiClient from "@/core/infrastructure/ApiClient"
+import type { Item } from "@/core/domain/item/Item"
+```
+
+## Export Guidelines
+
+1. Actions MUST be exported as default exports
+2. Parameter types MAY be exported as named exports when they are reusable
+3. Response types SHOULD be imported from domain modules, not defined locally
+
+```typescript
+// CORRECT
+export default class GetItems {
+    // ...
+}
+
+// CORRECT - With exported parameter type
+export type AddItemParams = {
+    name: string
+    category: string
+    description?: string
+}
+
+export default class AddItem {
+    async execute(params: AddItemParams): Promise<Item> {
+        // ...
+    }
+}
+```
+
+## Additional Guidelines
+
+1. Actions SHOULD be stateless and not store data between calls
+2. Actions SHOULD have descriptive names that clearly indicate their purpose
+3. Actions SHOULD follow the same naming conventions as backend actions when possible
+4. Actions SHOULD be organized in domain-specific folders matching the backend structure
+5. Each action SHOULD have a corresponding index.ts file in domain folders for easy imports

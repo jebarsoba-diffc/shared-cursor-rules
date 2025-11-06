@@ -1,0 +1,142 @@
+---
+description: API Actions Rules
+globs: **/core/actions/**/*.ts,**/core/actions/**/*.tsx
+alwaysApply: false
+---
+
+# API Actions Rules
+
+## Purpose and Structure
+
+API Actions represent individual use cases of the application. Each Action should:
+
+1. Implement exactly one use case
+2. Have a meaningful name that reflects its purpose (e.g., `GetItems`, `CreateUser`, `UpdateProfile`)
+3. Reside in an appropriate domain folder structure that MUST match the name of the domain of the use case (e.g., actions for Items should be in `/items`, actions for Users in `/users`)
+
+## Example
+
+```typescript
+import type Item from "@/core/domain/items/Item"
+import type Items from "@/core/domain/items/Items"
+
+export default class GetItems {
+    constructor(private readonly items: Items) {}
+
+    async execute(): Promise<Item[]> {
+        return await this.items.getAll()
+    }
+}
+```
+
+## Dependency Injection
+
+1. Actions MUST receive all dependencies through the constructor
+2. All dependencies MUST be declared as `private readonly`
+3. Dependencies SHOULD be interfaces or abstract classes, not concrete implementations
+4. Repository dependencies MUST follow the naming convention: Domain class name + "s" (e.g., `Items`, `Users`, `Profiles`)
+
+```typescript
+// CORRECT
+constructor(
+    private readonly items: Items,
+    private readonly logger: Logger,
+    private readonly idGenerator: IdGenerator
+) {}
+
+// INCORRECT
+constructor(
+    private items: Items, // Missing readonly
+    public logger: Logger, // Should be private
+    readonly idGenerator: IdGenerator // Missing private
+) {}
+```
+
+## Method Requirements
+
+1. Actions MUST have exactly one public method named `execute`
+2. The `execute` method MUST be `async`
+3. The `execute` method MUST have well-defined parameter and return types
+4. The `execute` method SHOULD have a single return point
+
+```typescript
+// CORRECT
+async execute(userId: string): Promise<Item[]> {
+    const items = await this.items.getByUserId(userId)
+    return items
+}
+
+// INCORRECT
+execute(userId: string) { // Missing async
+    // ...
+}
+```
+
+## Error Handling
+
+1. Actions MUST throw a `DomainError` when validations fail or operations cannot complete
+2. Actions SHOULD NOT catch errors internally unless they can be properly handled
+3. Generic exceptions SHOULD NOT be thrown directly
+
+```typescript
+// CORRECT
+import { USER_NOT_FOUND } from "@/core/domain/user/Errors"
+
+async execute(id: string): Promise<User> {
+    const user = await this.users.getById(id)
+    
+    if (!user) {
+        throw USER_NOT_FOUND
+    }
+    
+    return user
+}
+```
+
+```typescript
+// INCORRECT
+async execute(id: string): Promise<User> {
+    const user = await this.users.getById(id)
+    
+    if (!user) {
+        throw new Error("No user found")
+    }
+    
+    return user
+}
+```
+
+## Common Utilities
+
+1. New UUIDs MUST always be created using `IdGenerator.generate()`, validate that no other library/dependecy is used for generating IDs
+2. Current timestamps MUST always be obtained using `clock.now()`
+
+```typescript
+// CORRECT
+async execute(data: CreateItemData): Promise<Item> {
+    const item = {
+        id: this.idGenerator.generate(),
+        createdAt: this.clock.now(),
+        // other properties
+    }
+    
+    return await this.items.create(item)
+}
+
+// INCORRECT
+async execute(data: CreateItemData): Promise<Item> {
+    const item = {
+        id: randomUUID()
+        createdAt: new Date(),
+        // other properties
+    }
+    
+    return await this.items.create(item)
+}
+```
+
+## Additional Guidelines
+
+1. Actions SHOULD be stateless
+2. Actions SHOULD NOT be directly dependent on infrastructure concerns (databases, external APIs)
+3. Input validation SHOULD occur at the beginning of the execute method

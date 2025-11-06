@@ -1,0 +1,396 @@
+---
+description: API Core Tests Rules
+globs: **/core_test/**/*.ts,**/core_test/**/*.tsx
+alwaysApply: false
+---
+
+# API Core Tests Rules
+
+## Purpose and Testing Philosophy
+
+**Testing Framework**: Use **Vitest** as the testing framework (Jest is deprecated and must be migrated ASAP)
+
+The core_test directory contains comprehensive test coverage for all core business logic and domain functionality. This testing strategy follows clean architecture principles and ensures:
+
+1. **Complete Business Logic Coverage**: Action tests naturally cover all domain classes through their use
+2. **Repository Implementation Testing**: Single test suites verify both in-memory and database implementations
+3. **Infrastructure Component Testing**: Individual testing of external system integrations with proper mocking
+4. **Domain Integrity**: No direct domain class testing - domains are tested through their use in actions
+5. **Infrastructure Isolation**: External system integrations with proper mocking
+
+**CRITICAL**: This testing approach eliminates redundant tests while ensuring comprehensive coverage through natural usage patterns.
+
+## File Structure and Testing Strategy
+
+### Directory Structure and Rules
+```
+core_test/
+├── actions/                    # Action tests (use in-memory repositories)
+│   ├── codebase/              # Codebase domain actions
+│   ├── commit/                # Commit domain actions
+│   ├── code_review/           # Code review domain actions
+│   └── llm/                   # LLM domain actions
+├── infrastructure/            # Infrastructure component tests
+│   ├── repositories/          # Repository tests (test BOTH InMemory and Postgres)
+│   │   ├── Codebases.test.ts
+│   │   ├── CommitEvaluations.test.ts
+│   │   └── CommitEvaluationReviews.test.ts
+│   ├── azure/                 # Azure service tests (mock external calls)
+│   ├── platform/              # GitHub/GitLab tests (mock API calls)
+│   ├── queue/                 # Queue tests
+│   └── rules/                 # Rule system tests
+└── fixtures/                  # Shared test fixtures and constants
+```
+
+**CRITICAL**: Repository test files in `repositories/` are named after the interface (e.g., `Codebases.test.ts`) and test BOTH `InMemory{Interface}.ts` and `Postgres{Interface}.ts` implementations using the `runRepositoryTests` helper.
+
+### Testing Rules by Component Type
+
+#### 1. Action Tests (Primary Coverage)
+**Location**: `/src/core_test/actions/`
+**Coverage**: Business logic + Domain classes + Repository interfaces
+
+```typescript
+// ✅ CORRECT: Action test covers domain and repository usage
+describe("AddCodebaseAction", () => {
+    let codebases: InMemoryCodebases        // Real in-memory implementation
+    let codebaseService: CodebaseService    // Mock external service
+    let action: AddCodebaseAction
+
+    beforeEach(() => {
+        codebases = new InMemoryCodebases(instance(mockLogger))
+        codebaseService = mock<CodebaseService>()
+        action = new AddCodebaseAction(codebases, instance(codebaseService))
+    })
+
+    // Test covers: Action logic + Codebase domain + repository interface
+    it("should create codebase successfully", async () => {
+        // This single test naturally validates:
+        // - Action business logic
+        // - Codebase domain object creation
+        // - Repository save/find operations
+        // - Domain error handling
+    })
+})
+```
+
+**InMemoryRemote Usage in Action Tests:**
+
+```typescript
+// ✅ CORRECT: Action test with InMemoryRemote for dual-purpose repository
+describe("AnalyzeDefectAction", () => {
+    let remoteConfigItems: InMemoryRemoteConfigurationItems  // Simulates both local DB and remote service
+    let remoteUsers: InMemoryRemoteUsers                     // Simulates remote user service
+    let action: AnalyzeDefectAction
+
+    beforeEach(() => {
+        const logger = instance(mockLogger)
+        remoteConfigItems = new InMemoryRemoteConfigurationItems(logger)
+        remoteUsers = new InMemoryRemoteUsers()
+        action = new AnalyzeDefectAction(remoteConfigItems, remoteUsers)
+    })
+
+    it("should analyze defect with local and remote data", async () => {
+        // Given - Setup local data
+        const configItem = aConfigurationItem()
+        await remoteConfigItems.put(configItem, anEmbedding())
+
+        // Given - Setup remote data
+        remoteConfigItems.setConfigItemFields("server-001", {
+            assignmentGroup: "IT-Support",
+            productLine: "Infrastructure"
+        })
+        remoteUsers.setUserSysId("john.doe", "sys-id-12345")
+
+        // When
+        const result = await action.execute({ configItemName: "server-001" })
+
+        // Then - Verifies both local and remote operations
+        expect(result.assignmentGroup).toBe("IT-Support")
+        expect(result.similarItems).toHaveLength(1)
+    })
+})
+
+// Note: Remote repository variables use camelCase with 'remote' prefix (e.g., remoteUsers, remoteProducts)
+// to clearly distinguish them from local repositories (e.g., users, products)
+```
+
+#### 2. Repository Tests (Implementation Verification)
+**Location**: `/src/core_test/infrastructure/repositories/`
+**Coverage**: Both in-memory and PostgreSQL implementations
+**Naming Pattern**: Test file named after interface (e.g., `Codebases.test.ts` tests both `InMemoryCodebases.ts` and `PostgresCodebases.ts`)
+
+```typescript
+// ✅ CORRECT: Single test suite for both implementations
+// File: /src/core_test/infrastructure/repositories/Codebases.test.ts
+// Tests BOTH:
+//   - /src/core/infrastructure/in_memory/InMemoryCodebases.ts
+//   - /src/core/infrastructure/postgres/PostgresCodebases.ts
+
+describe("Codebases", () => {
+    runRepositoryTests<Codebases>(
+        "Codebases Repository",
+        () => new InMemoryCodebases(instance(mock<Logger>())),
+        (client: PostgresClient) => new PostgresCodebases(instance(mock<Logger>()), client),
+        (getRepository) => {
+            describe("add method", () => {
+                it("should add codebase successfully", async () => {
+                    const codebases = getRepository()
+                    const codebase = given_valid_codebase_with_unique_id()
+                    const result = await when_adding_codebase(codebases, codebase)
+                    then_codebase_should_be_added(result, codebase)
+                    await then_codebase_should_be_stored(codebases, codebase)
+                })
+            })
+            // ... more test cases
+        }
+    )
+})
+```
+
+**IMPORTANT**: Repository test files are located in `/src/core_test/infrastructure/repositories/` and named after the interface (without `InMemory` or `Postgres` prefix). Both implementations are tested by a single test file using the `runRepositoryTests` helper.
+
+#### 3. Infrastructure Component Tests (External Integration)
+**Location**: `/src/core_test/infrastructure/{service}/`
+**Coverage**: Individual components with mocked externals
+
+```typescript
+// ✅ CORRECT: Infrastructure test with external mocking
+describe("AzureOpenAIClient", () => {
+    let client: AzureOpenAIClient
+    let mockHttpClient: HttpClient
+
+    beforeEach(() => {
+        mockHttpClient = mock<HttpClient>()
+        client = new AzureOpenAIClient(instance(mockHttpClient), config)
+    })
+
+    it("should generate code review successfully", async () => {
+        // Given
+        given_azure_api_returns_successful_response()
+
+        // When
+        const review = await client.generateReview(aCodeDiff())
+
+        // Then
+        then_review_should_be_properly_structured(review)
+    })
+
+    it("should handle API failures gracefully", async () => {
+        // Given
+        given_azure_api_fails()
+
+        // When/Then
+        await expect(client.generateReview(aCodeDiff()))
+            .rejects.toThrow(AZURE_API_ERROR)
+    })
+})
+```
+
+## CRITICAL RULES: What NOT to Test
+
+### ❌ NO Direct Domain Class Tests
+**Domain classes are tested through Action usage - never test them directly**
+
+```typescript
+// ❌ FORBIDDEN: Direct domain class testing
+describe("Codebase", () => {
+    it("should create codebase with valid parameters", () => {
+        // DON'T DO THIS - Actions already test this naturally
+    })
+})
+
+// ✅ CORRECT: Domain tested through Action
+describe("AddCodebaseAction", () => {
+    it("should create codebase successfully", async () => {
+        // This naturally tests Codebase creation and validation
+        const result = await action.execute(validInput)
+        // Domain is tested through real usage
+    })
+})
+```
+
+### ❌ NO Individual Repository Implementation Tests
+**Use single test suite for both implementations in repositories folder**
+
+```typescript
+// ❌ FORBIDDEN: Separate test files per implementation
+// /src/core_test/infrastructure/postgres/PostgresCodebases.test.ts
+// /src/core_test/infrastructure/in_memory/InMemoryCodebases.test.ts
+
+// ✅ CORRECT: Single test file in repositories folder named after interface
+// /src/core_test/infrastructure/repositories/Codebases.test.ts (tests BOTH implementations)
+```
+
+**Pattern Summary**:
+- Implementation files: `InMemory{Interface}.ts` and `Postgres{Interface}.ts` in their respective folders
+- Test file: `{Interface}.test.ts` in `/src/core_test/infrastructure/repositories/`
+- Example: Both `InMemoryCodebases.ts` and `PostgresCodebases.ts` are tested by `Codebases.test.ts`
+
+### ❌ NO Mocked Repository Tests in Actions
+**Actions must use real in-memory repositories**
+
+```typescript
+// ❌ FORBIDDEN: Mocked repository in Action test
+beforeEach(() => {
+    const mockRepository = mock<Codebases>()
+    action = new AddCodebaseAction(instance(mockRepository))
+})
+
+// ✅ CORRECT: Real in-memory repository in Action test
+beforeEach(() => {
+    const repository = new InMemoryCodebases(instance(mockLogger))
+    action = new AddCodebaseAction(repository)
+})
+```
+
+## Testing Strategy by Layer
+
+### Core Actions Testing (Primary Coverage Layer)
+- **Use in-memory repositories** - never mock repository interfaces
+- **Use InMemoryRemote repositories** - when simulating both local and remote operations
+- **Mock external services** - GitHub API, Azure OpenAI, etc.
+- **Mock infrastructure** - IdGenerator, Clock for deterministic test results
+- **Cover all scenarios** - success, validation, errors, edge cases
+- **Natural domain testing** - domain classes tested through action usage
+
+### InMemoryRemote vs InMemory Repositories
+- **InMemory**: Use for repositories that only handle local database operations (e.g., `InMemoryCodebases`, `InMemoryCommits`, `InMemoryOrders`)
+- **InMemoryRemote**: Use for repositories that simulate both local data storage AND remote service queries (e.g., `InMemoryRemoteUsers`, `InMemoryRemoteProducts`, `InMemoryRemoteConfigurationItems`)
+- **When to use which**: If production has separate implementations for local (Postgres) and remote operations, use InMemoryRemote to test both without mocks
+- **Naming convention**: Use `remote` prefix for variable names (e.g., `remoteUsers`, `remoteProducts`) to distinguish from local repositories (e.g., `users`, `products`)
+- **Production naming**: Remote repository classes follow pattern `Remote{Entity}` (e.g., `RemoteUsers`, `RemoteProducts`)
+
+
+### Repository Testing (Implementation Verification)
+- **Single test suite** for both in-memory and PostgreSQL implementations
+- **Located in** `/src/core_test/infrastructure/repositories/` directory
+- **Named after interface** (e.g., `Codebases.test.ts` for `InMemoryCodebases` and `PostgresCodebases`)
+- **Test database operations** without mocking database layer
+- **Verify data persistence** and retrieval accuracy
+- **Test query operations** and filtering logic
+- **Handle database-specific errors** properly
+- **Use `runRepositoryTests` helper** to test both implementations with same test cases
+
+### Infrastructure Testing (External Integration)
+- **Mock external systems** - APIs, file systems, network calls
+- **Test error handling** - network failures, API errors, timeouts
+- **Verify configuration** - proper setup and initialization
+- **Test integration patterns** - retry logic, circuit breakers
+
+## Test Organization Patterns
+
+### Given-When-Then Structure
+All tests must use Given-When-Then pattern with descriptive helpers:
+
+```typescript
+// Action test helpers
+const given_valid_codebase_input = () => aValidCodebaseInput()
+const given_github_service_succeeds = () => {
+    when(mockGitHubService.validateRepository(anything()))
+        .thenResolve(aRepositoryValidationResult())
+}
+
+const when_adding_codebase = (input: AddCodebaseInput) =>
+    action.execute(input)
+
+const then_codebase_should_be_created = (codebase: Codebase) => {
+    expect(codebase.Id).toBeDefined()
+    expect(codebase.Name).toBeDefined()
+}
+
+const then_codebase_should_be_saved = async (codebase: Codebase) => {
+    const saved = await repository.findById(codebase.Id)
+    expect(saved).toEqual(codebase)
+}
+```
+
+### Fixture-Based Test Data
+Use comprehensive fixtures for all test scenarios:
+
+```typescript
+// Shared fixtures in /src/core_test/fixtures/
+export const aCodebase = (overrides?: Partial<CodebaseProps>) => new Codebase({
+    id: TEST_CONSTANTS.CODEBASE_ID,
+    name: TEST_CONSTANTS.CODEBASE_NAME,
+    repositoryUrl: TEST_CONSTANTS.REPOSITORY_URL,
+    ...overrides
+})
+
+export const aValidCodebaseInput = (): AddCodebaseInput => ({
+    name: TEST_CONSTANTS.CODEBASE_NAME,
+    repositoryUrl: TEST_CONSTANTS.REPOSITORY_URL,
+    platform: Platform.GitHub
+})
+
+export const anInvalidCodebaseInput = (): AddCodebaseInput => ({
+    name: TEST_CONSTANTS.EMPTY_STRING,
+    repositoryUrl: TEST_CONSTANTS.INVALID_URL,
+    platform: Platform.GitHub
+})
+```
+
+## Error Testing Requirements
+
+### Domain Error Testing
+Verify proper domain error throwing and handling:
+
+```typescript
+import { CODEBASE_NOT_FOUND, DUPLICATE_CODEBASE } from "@/core/domain/codebase/Errors"
+
+it("should throw domain error for duplicate codebase", async () => {
+    // Given
+    const input = given_valid_input()
+    await given_codebase_already_exists(input.name)
+
+    // When/Then
+    await expect(when_adding_codebase(input))
+        .rejects.toThrow(DUPLICATE_CODEBASE)
+})
+```
+
+### Infrastructure Error Testing
+Test external system failure scenarios:
+
+```typescript
+it("should handle GitHub API failure gracefully", async () => {
+    // Given
+    const input = given_valid_input()
+    given_github_api_fails()
+
+    // When/Then
+    await expect(when_adding_codebase(input))
+        .rejects.toThrow(GITHUB_API_ERROR)
+})
+```
+
+## Comprehensive Coverage Strategy
+
+### What Gets Tested Where
+1. **Domain Logic**: Tested through Actions (no separate domain tests)
+2. **Repository Interfaces**: Tested through Actions (with in-memory implementation)
+3. **Repository Implementations**: Tested in `/src/core_test/infrastructure/repositories/` (both InMemory and Postgres implementations tested by single file)
+4. **External Services**: Tested individually in infrastructure tests (mocked externals)
+
+**Repository Test Pattern**:
+- File: `/src/core_test/infrastructure/repositories/{Interface}.test.ts`
+- Tests: Both `/src/core/infrastructure/in_memory/InMemory{Interface}.ts` and `/src/core/infrastructure/postgres/Postgres{Interface}.ts`
+- Helper: Uses `runRepositoryTests` to run same tests against both implementations
+
+### Coverage Verification
+- **Actions**: Must cover all business scenarios and naturally test domain usage
+- **Infrastructure**: Must test both happy path and error scenarios with proper mocking
+
+This testing strategy ensures 100% coverage while eliminating redundant tests and maintaining clean separation of concerns.
+
+## Summary
+
+Core tests follow clean architecture principles with strategic layering:
+
+1. **Actions** (Primary): Use in-memory repositories, test business logic + domains naturally
+2. **Infrastructure**: Single test suites for repository implementations, mock external systems
+3. **No Domain Tests**: Domains tested through natural Action usage
+4. **No Repository Mocks**: Actions use real in-memory implementations
+5. **Strategic Mocking**: Only mock external systems
+
+This approach provides comprehensive coverage while maintaining test reliability, performance, and maintainability.
